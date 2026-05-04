@@ -1,3 +1,5 @@
 x402[fastapi,evm]
 fastapi
 uvicorn[standard]
+trafilatura
+httpx
