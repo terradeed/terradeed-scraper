@@ -37,12 +37,7 @@ app = FastAPI(
 
 # ── x402 payment infrastructure ───────────────────────────────────────────────
 
-import os
-facilitator = HTTPFacilitatorClient(FacilitatorConfig(
-    url=FACILITATOR,
-    api_key_id=os.environ.get("CDP_API_KEY_ID"),
-    api_key_secret=os.environ.get("CDP_API_KEY_SECRET"),
-))
+facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=FACILITATOR))
 server = x402ResourceServer(facilitator)
 server.register(NETWORK, ExactEvmServerScheme())
 
