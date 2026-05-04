@@ -25,7 +25,7 @@ from x402.server import x402ResourceServer
 PAY_TO      = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
 PRICE       = "$0.005"
 NETWORK     = "eip155:84532"
-FACILITATOR = "https://x402.org/facilitator"
+FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402"
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
@@ -37,7 +37,12 @@ app = FastAPI(
 
 # ── x402 payment infrastructure ───────────────────────────────────────────────
 
-facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=FACILITATOR))
+import os
+facilitator = HTTPFacilitatorClient(FacilitatorConfig(
+    url=FACILITATOR,
+    api_key_id=os.environ.get("CDP_API_KEY_ID"),
+    api_key_secret=os.environ.get("CDP_API_KEY_SECRET"),
+))
 server = x402ResourceServer(facilitator)
 server.register(NETWORK, ExactEvmServerScheme())
 
