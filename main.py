@@ -4,7 +4,7 @@ TerraDeed Labs — x402 Web Scraping API (Phase 2: real scraping + CDP mainnet)
 Wallet:    0x4E024e356bd01853654b7B5196F2B85F67Cc39EC  (Base mainnet)
 Price:     $0.01 USDC per call
 Network:   Base mainnet (eip155:8453)
-Facilitator: CDP (https://api.cdp.coinbase.com/platform/v2/x402)
+Facilitator: xpay (https://facilitator.xpay.sh)
 
 Set these env vars in Railway:
     CDP_API_KEY_ID=your-key-id
@@ -43,11 +43,6 @@ CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
 # ── CDP JWT Auth Provider ─────────────────────────────────────────────────────
 
 def _build_cdp_auth_provider() -> CreateHeadersAuthProvider | None:
-    """
-    Build a CDP auth provider using the cdp-sdk JWT generator.
-    Returns None if CDP keys are not set (falls back to unauthenticated,
-    which works with the testnet facilitator but not CDP mainnet).
-    """
     if not CDP_API_KEY_ID or not CDP_API_KEY_SECRET:
         return None
 
@@ -58,10 +53,6 @@ def _build_cdp_auth_provider() -> CreateHeadersAuthProvider | None:
         CDP_BASE_PATH = "/platform/v2/x402"
 
         def create_headers() -> dict[str, dict[str, str]]:
-            """
-            Called fresh on every request by CreateHeadersAuthProvider.
-            Generates a new JWT for each endpoint path so tokens are never stale.
-            """
             def _auth(method: str, path: str) -> dict[str, str]:
                 opts = GetAuthHeadersOptions(
                     api_key_id=CDP_API_KEY_ID,
@@ -71,7 +62,6 @@ def _build_cdp_auth_provider() -> CreateHeadersAuthProvider | None:
                     request_path=path,
                 )
                 headers = get_auth_headers(opts)
-                # Only pass Authorization — Content-Type is added by the client
                 return {"Authorization": headers["Authorization"]}
 
             return {
@@ -129,6 +119,21 @@ routes: dict[str, RouteConfig] = {
                 "discoverable": True,
                 "category": "search",
                 "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent"],
+                "info": {
+                    "name": "TerraDeed Web Scraper",
+                    "description": "Pay-per-use web scraping API. Extracts clean LLM-ready markdown from any URL. Returns title, word count, and content.",
+                },
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "description": "Clean LLM-ready markdown extracted from the URL"},
+                        "url": {"type": "string", "description": "The URL that was scraped"},
+                        "status": {"type": "string", "description": "success or error"},
+                        "word_count": {"type": "integer", "description": "Number of words in extracted content"},
+                        "title": {"type": "string", "description": "Page title"},
+                    },
+                    "required": ["content", "url", "status"],
+                },
             }
         },
     ),
