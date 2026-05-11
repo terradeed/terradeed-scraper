@@ -35,7 +35,7 @@ from x402.server import x402ResourceServer
 PAY_TO      = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
 PRICE       = "$0.01"
 NETWORK     = "eip155:8453"          # Base mainnet
-FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402"
+FACILITATOR = "https://facilitator.xpay.sh"
 
 CDP_API_KEY_ID     = os.environ.get("CDP_API_KEY_ID", "")
 CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
