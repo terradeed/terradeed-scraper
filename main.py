@@ -247,6 +247,48 @@ async def health() -> dict[str, str]:
         "network": NETWORK,
     }
 
+@app.get("/bazaar.json")
+async def bazaar_manifest() -> dict[str, Any]:
+    """
+    Static Bazaar discovery manifest.
+    Workaround for Python SDK stripping unknown fields from the info block.
+    """
+    return {
+        "resources": [
+            {
+                "url": "https://web-production-73194.up.railway.app/scrape",
+                "method": "POST",
+                "name": "TerraDeed Web Scraper",
+                "description": "Pay-per-use web scraping API. Extracts clean LLM-ready markdown from any URL. Returns title, word count, and content.",
+                "category": "search",
+                "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent"],
+                "input": {
+                    "url": "https://example.com"
+                },
+                "output": {
+                    "description": "Clean LLM-ready markdown extracted from the target URL, with title and word count.",
+                    "content_type": "application/json",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string", "description": "Clean LLM-ready markdown extracted from the URL"},
+                            "url": {"type": "string", "description": "The URL that was scraped"},
+                            "status": {"type": "string", "description": "success or error"},
+                            "word_count": {"type": "integer", "description": "Number of words in extracted content"},
+                            "title": {"type": "string", "description": "Page title"},
+                        },
+                        "required": ["content", "url", "status"],
+                    }
+                },
+                "pricing": {
+                    "amount": "0.01",
+                    "currency": "USDC",
+                    "network": "eip155:8453"
+                }
+            }
+        ]
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=4021)
