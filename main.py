@@ -122,6 +122,13 @@ routes: dict[str, RouteConfig] = {
                 "info": {
                     "name": "TerraDeed Web Scraper",
                     "description": "Pay-per-use web scraping API. Extracts clean LLM-ready markdown from any URL. Returns title, word count, and content.",
+                    "input": {
+                        "url": "https://example.com",
+                    },
+                    "output": {
+                        "description": "Clean LLM-ready markdown extracted from the target URL, with title and word count.",
+                        "content_type": "application/json",
+                    },
                 },
                 "schema": {
                     "type": "object",
