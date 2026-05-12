@@ -128,6 +128,13 @@ routes: dict[str, RouteConfig] = {
                     "output": {
                         "description": "Clean LLM-ready markdown extracted from the target URL, with title and word count.",
                         "content_type": "application/json",
+"example": {
+    "content": "## Example Domain\n\nThis domain is for use in illustrative examples.",
+    "url": "https://example.com",
+    "status": "success",
+    "word_count": 14,
+    "title": "Example Domain"
+},
                     },
                 },
                 "schema": {
