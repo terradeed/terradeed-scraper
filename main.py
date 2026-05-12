@@ -128,13 +128,13 @@ routes: dict[str, RouteConfig] = {
                     "output": {
                         "description": "Clean LLM-ready markdown extracted from the target URL, with title and word count.",
                         "content_type": "application/json",
-"example": {
-    "content": "## Example Domain\n\nThis domain is for use in illustrative examples.",
-    "url": "https://example.com",
-    "status": "success",
-    "word_count": 14,
-    "title": "Example Domain"
-},
+                        "example": {
+                            "content": "## Example Domain\n\nThis domain is for use in illustrative examples.",
+                            "url": "https://example.com",
+                            "status": "success",
+                            "word_count": 14,
+                            "title": "Example Domain",
+                        },
                     },
                 },
                 "schema": {
@@ -256,10 +256,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/bazaar.json")
 async def bazaar_manifest() -> dict[str, Any]:
-    """
-    Static Bazaar discovery manifest.
-    Workaround for Python SDK stripping unknown fields from the info block.
-    """
+    """Static Bazaar discovery manifest."""
     return {
         "resources": [
             {
@@ -269,12 +266,17 @@ async def bazaar_manifest() -> dict[str, Any]:
                 "description": "Pay-per-use web scraping API. Extracts clean LLM-ready markdown from any URL. Returns title, word count, and content.",
                 "category": "search",
                 "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent"],
-                "input": {
-                    "url": "https://example.com"
-                },
+                "input": {"url": "https://example.com"},
                 "output": {
                     "description": "Clean LLM-ready markdown extracted from the target URL, with title and word count.",
                     "content_type": "application/json",
+                    "example": {
+                        "content": "## Example Domain\n\nThis domain is for use in illustrative examples.",
+                        "url": "https://example.com",
+                        "status": "success",
+                        "word_count": 14,
+                        "title": "Example Domain",
+                    },
                     "schema": {
                         "type": "object",
                         "properties": {
@@ -290,7 +292,40 @@ async def bazaar_manifest() -> dict[str, Any]:
                 "pricing": {
                     "amount": "0.01",
                     "currency": "USDC",
-                    "network": "eip155:8453"
+                    "network": "eip155:8453",
+                }
+            }
+        ]
+    }
+
+@app.get("/.well-known/x402")
+async def well_known_x402() -> dict[str, Any]:
+    """Standard x402 discovery endpoint for crawlers and indexers."""
+    return {
+        "version": 2,
+        "resources": [
+            {
+                "url": "https://web-production-73194.up.railway.app/scrape",
+                "method": "POST",
+                "description": "Pay-per-use web scraping API. Extracts clean LLM-ready markdown from any URL.",
+                "accepts": [
+                    {
+                        "scheme": "exact",
+                        "network": "eip155:8453",
+                        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                        "amount": "10000",
+                        "payTo": "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC",
+                    }
+                ],
+                "info": {
+                    "name": "TerraDeed Web Scraper",
+                    "category": "search",
+                    "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent"],
+                    "input": {"url": "https://example.com"},
+                    "output": {
+                        "description": "Clean LLM-ready markdown with title and word count.",
+                        "content_type": "application/json",
+                    }
                 }
             }
         ]
