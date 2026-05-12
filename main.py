@@ -1,5 +1,5 @@
 """
-TerraDeed Labs — x402 Web Scraping API (Phase 2: real scraping + CDP mainnet)
+TerraDeed Labs — x402 Web Scraping API
 
 Wallet:    0x4E024e356bd01853654b7B5196F2B85F67Cc39EC  (Base mainnet)
 Price:     $0.01 USDC per call
@@ -36,6 +36,7 @@ PAY_TO      = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
 PRICE       = "$0.01"
 NETWORK     = "eip155:8453"          # Base mainnet
 FACILITATOR = "https://facilitator.xpay.sh"
+BASE_URL    = "https://api.terradeed.co.uk"
 
 CDP_API_KEY_ID     = os.environ.get("CDP_API_KEY_ID", "")
 CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
@@ -260,7 +261,7 @@ async def bazaar_manifest() -> dict[str, Any]:
     return {
         "resources": [
             {
-                "url": "https://web-production-73194.up.railway.app/scrape",
+                "url": f"{BASE_URL}/scrape",
                 "method": "POST",
                 "name": "TerraDeed Web Scraper",
                 "description": "Pay-per-use web scraping API. Extracts clean LLM-ready markdown from any URL. Returns title, word count, and content.",
@@ -305,7 +306,7 @@ async def well_known_x402() -> dict[str, Any]:
         "version": 2,
         "resources": [
             {
-                "url": "https://web-production-73194.up.railway.app/scrape",
+                "url": f"{BASE_URL}/scrape",
                 "method": "POST",
                 "description": "Pay-per-use web scraping API. Extracts clean LLM-ready markdown from any URL.",
                 "accepts": [
@@ -314,7 +315,7 @@ async def well_known_x402() -> dict[str, Any]:
                         "network": "eip155:8453",
                         "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
                         "amount": "10000",
-                        "payTo": "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC",
+                        "payTo": PAY_TO,
                     }
                 ],
                 "info": {
