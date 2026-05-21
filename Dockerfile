@@ -44,8 +44,5 @@ RUN playwright install-deps chromium
 # Copy application code
 COPY . .
 
-# Expose port
-EXPOSE 8080
-
-# Run the application
-CMD ["/app/.venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Use shell form so $PORT is expanded at runtime by Railway
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
