@@ -29,7 +29,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Install Python dependencies
+# Create virtualenv at /app/.venv to match Railway's expectations
+RUN python -m venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Install Python dependencies into the venv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -44,4 +48,4 @@ COPY . .
 EXPOSE 8080
 
 # Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["/app/.venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
