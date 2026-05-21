@@ -4,3 +4,4 @@ uvicorn[standard]
 trafilatura
 httpx
 cdp-sdk
+playwright

@@ -20,7 +20,7 @@ from x402.mechanisms.evm.exact import register_exact_evm_client
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-SERVER_URL = "http://localhost:4021"
+SERVER_URL = "https://web-production-73194.up.railway.app"
 TARGET_URL = "https://example.com"        # The URL we're asking the server to scrape
 
 # Read private key from environment — never hardcode this
