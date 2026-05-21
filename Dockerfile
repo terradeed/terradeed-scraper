@@ -44,5 +44,5 @@ RUN playwright install-deps chromium
 # Copy application code
 COPY . .
 
-# Use shell form so $PORT is expanded at runtime by Railway
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
+# Explicitly invoke sh so $PORT is expanded before uvicorn parses it
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
