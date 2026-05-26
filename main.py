@@ -2,13 +2,16 @@
 TerraDeed Labs — x402 Web Scraping API
 
 Wallet:    0x4E024e356bd01853654b7B5196F2B85F67Cc39EC  (Base mainnet)
-Price:     $0.01 USDC per call
+Endpoints:
+    POST /scrape   — $0.01 USDC — clean LLM-ready markdown from any URL
+    POST /extract  — $0.05 USDC — schema-driven structured JSON extraction
 Network:   Base mainnet (eip155:8453)
 Facilitator: xpay (https://facilitator.xpay.sh)
 
 Set these env vars in Railway:
-    CDP_API_KEY_ID=your-key-id
-    CDP_API_KEY_SECRET=your-secret
+    ANTHROPIC_API_KEY=your-anthropic-key  (required for /extract)
+    CDP_API_KEY_ID=your-key-id            (optional)
+    CDP_API_KEY_SECRET=your-secret        (optional)
 """
 
 import json
@@ -33,42 +36,65 @@ from x402.server import x402ResourceServer
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-PAY_TO      = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
-PRICE       = "$0.01"
-NETWORK     = "eip155:8453"          # Base mainnet
-FACILITATOR = "https://facilitator.xpay.sh"
-BASE_URL    = "https://api.terradeed.co.uk"
-USDC_BASE   = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+PAY_TO           = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
+SCRAPE_PRICE     = "$0.01"
+EXTRACT_PRICE    = "$0.05"
+NETWORK          = "eip155:8453"
+FACILITATOR      = "https://facilitator.xpay.sh"
+BASE_URL         = "https://api.terradeed.co.uk"
+USDC_BASE        = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+EXTRACT_MODEL    = "claude-sonnet-4-20250514"
 
 CDP_API_KEY_ID     = os.environ.get("CDP_API_KEY_ID", "")
 CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
+ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
 
-# ── x402 accepts array (shared between middleware and 402 body) ───────────────
+# ── x402 accepts arrays (per route, shared with 402 body middleware) ──────────
 
-X402_ACCEPTS = [
+SCRAPE_ACCEPTS = [
     {
         "scheme": "exact",
         "network": NETWORK,
         "asset": USDC_BASE,
-        "amount": "10000",
+        "amount": "10000",       # $0.01 USDC (6 decimals)
         "payTo": PAY_TO,
     }
 ]
+
+EXTRACT_ACCEPTS = [
+    {
+        "scheme": "exact",
+        "network": NETWORK,
+        "asset": USDC_BASE,
+        "amount": "50000",       # $0.05 USDC (6 decimals)
+        "payTo": PAY_TO,
+    }
+]
+
+ROUTE_ACCEPTS = {
+    "POST /scrape":  SCRAPE_ACCEPTS,
+    "POST /extract": EXTRACT_ACCEPTS,
+}
 
 # ── ASGI middleware: injects accepts array into 402 response body ─────────────
 
 class X402ResponseBodyMiddleware:
     """
-    Wraps the payment middleware and ensures every 402 response includes
-    the x402 v2 accepts array in the body.
-    Required for strict-v2 badge from validators like mapper-mcp.
+    Intercepts 402 responses and injects the correct x402 v2 accepts array
+    into the body. Route-aware — returns the accepts array for the specific
+    endpoint being accessed. Required for strict-v2 validation.
     """
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: Any, route_accepts: dict[str, list]) -> None:
         self.app = app
-        self._body = json.dumps({
+        self.route_accepts = route_accepts
+
+    def _build_body(self, method: str, path: str) -> bytes:
+        route_key = f"{method} {path}"
+        accepts = self.route_accepts.get(route_key, [])
+        return json.dumps({
             "x402Version": 2,
-            "accepts": X402_ACCEPTS,
+            "accepts": accepts,
             "error": "Payment required",
         }).encode()
 
@@ -77,7 +103,10 @@ class X402ResponseBodyMiddleware:
             await self.app(scope, receive, send)
             return
 
+        method = scope.get("method", "")
+        path = scope.get("path", "")
         status_code: Optional[int] = None
+        body = self._build_body(method, path)
 
         async def send_wrapper(message: Any) -> None:
             nonlocal status_code
@@ -87,7 +116,7 @@ class X402ResponseBodyMiddleware:
                 if status_code == 402:
                     headers = {k: v for k, v in message.get("headers", [])}
                     headers[b"content-type"] = b"application/json"
-                    headers[b"content-length"] = str(len(self._body)).encode()
+                    headers[b"content-length"] = str(len(body)).encode()
                     message = {
                         "type": "http.response.start",
                         "status": 402,
@@ -97,7 +126,7 @@ class X402ResponseBodyMiddleware:
             elif message["type"] == "http.response.body" and status_code == 402:
                 message = {
                     "type": "http.response.body",
-                    "body": self._body,
+                    "body": body,
                     "more_body": False,
                 }
 
@@ -139,7 +168,7 @@ def _build_cdp_auth_provider() -> CreateHeadersAuthProvider | None:
         return CreateHeadersAuthProvider(create_headers)
 
     except ImportError:
-        print("WARNING: cdp-sdk not installed. Install it to use CDP facilitator.")
+        print("WARNING: cdp-sdk not installed.")
         return None
 
 
@@ -147,8 +176,12 @@ def _build_cdp_auth_provider() -> CreateHeadersAuthProvider | None:
 
 app = FastAPI(
     title="TerraDeed Scrape API",
-    description="Pay-per-use web scraping. Returns clean LLM-ready markdown via x402 USDC micropayments. Supports JS rendering via Playwright.",
-    version="0.5.0",
+    description=(
+        "Pay-per-use web scraping and structured data extraction via x402 USDC micropayments. "
+        "POST /scrape — LLM-ready markdown ($0.01). "
+        "POST /extract — Schema-driven structured JSON ($0.05)."
+    ),
+    version="0.6.0",
 )
 
 # ── x402 payment infrastructure ───────────────────────────────────────────────
@@ -171,69 +204,43 @@ routes: dict[str, RouteConfig] = {
             PaymentOption(
                 scheme="exact",
                 pay_to=PAY_TO,
-                price=PRICE,
+                price=SCRAPE_PRICE,
                 network=NETWORK,
             ),
         ],
         mime_type="application/json",
         description=(
-            "Scrape any public URL and receive clean LLM-ready markdown. "
-            f"Price: {PRICE} USDC per call on Base mainnet. "
+            f"Scrape any public URL and receive clean LLM-ready markdown. "
+            f"Price: {SCRAPE_PRICE} USDC per call on Base mainnet. "
             "Supports JS rendering for SPAs and dynamic sites."
         ),
-        extensions={
-            "bazaar": {
-                "discoverable": True,
-                "category": "search",
-                "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent", "playwright", "js-rendering"],
-                "info": {
-                    "name": "TerraDeed Web Scraper",
-                    "description": "Pay-per-use web scraping API. Extracts clean LLM-ready markdown from any URL including JS-rendered SPAs. Returns title, word count, and content.",
-                    "input": {
-                        "url": "https://example.com",
-                        "js_render": False,
-                    },
-                    "output": {
-                        "description": "Clean LLM-ready markdown extracted from the target URL, with title, word count, and render method used.",
-                        "content_type": "application/json",
-                        "example": {
-                            "content": "## Example Domain\n\nThis domain is for use in illustrative examples.",
-                            "url": "https://example.com",
-                            "status": "success",
-                            "word_count": 14,
-                            "title": "Example Domain",
-                            "js_rendered": False,
-                        },
-                    },
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "content": {"type": "string", "description": "Clean LLM-ready markdown extracted from the URL"},
-                            "url": {"type": "string", "description": "The URL that was scraped"},
-                            "status": {"type": "string", "description": "success or error"},
-                            "word_count": {"type": "integer", "description": "Number of words in extracted content"},
-                            "title": {"type": "string", "description": "Page title"},
-                            "js_rendered": {"type": "boolean", "description": "Whether Playwright JS rendering was used"},
-                        },
-                        "required": ["content", "url", "status"],
-                    },
-                },
-            }
-        },
+    ),
+    "POST /extract": RouteConfig(
+        accepts=[
+            PaymentOption(
+                scheme="exact",
+                pay_to=PAY_TO,
+                price=EXTRACT_PRICE,
+                network=NETWORK,
+            ),
+        ],
+        mime_type="application/json",
+        description=(
+            f"Schema-driven structured JSON extraction from any URL. "
+            f"Pass a list of fields and receive clean, typed JSON. "
+            f"Price: {EXTRACT_PRICE} USDC per call on Base mainnet."
+        ),
     ),
 }
 
-# PaymentMiddlewareASGI added first = sits inner (closer to app)
 app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
-
-# X402ResponseBodyMiddleware added second = sits outer (sees 402 responses last)
-app.add_middleware(X402ResponseBodyMiddleware)
+app.add_middleware(X402ResponseBodyMiddleware, route_accepts=ROUTE_ACCEPTS)
 
 # ── Request / Response models ─────────────────────────────────────────────────
 
 class ScrapeRequest(BaseModel):
     url: str
-    js_render: bool = False  # Set True to use Playwright for JS-heavy sites
+    js_render: bool = False
 
 class ScrapeResponse(BaseModel):
     content: str
@@ -243,10 +250,23 @@ class ScrapeResponse(BaseModel):
     title: Optional[str] = None
     js_rendered: bool = False
 
+class ExtractRequest(BaseModel):
+    url: str
+    fields: list[str]           # e.g. ["price", "title", "author", "date"]
+    js_render: bool = False
+
+class ExtractResponse(BaseModel):
+    url: str
+    status: str
+    data: dict[str, Any]        # extracted fields as clean JSON
+    fields_requested: list[str]
+    fields_extracted: list[str] # subset of fields_requested that were found
+    js_rendered: bool = False
+    model: str = EXTRACT_MODEL
+
 # ── Static scraping (httpx + trafilatura) ─────────────────────────────────────
 
 def _fetch_static(url: str) -> tuple[str, str | None]:
-    """Fetch URL with httpx. Returns (html, title) or raises HTTPException."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -268,7 +288,6 @@ def _fetch_static(url: str) -> tuple[str, str | None]:
 # ── JS rendering (Playwright) ─────────────────────────────────────────────────
 
 async def _fetch_with_playwright(url: str) -> str:
-    """Fetch URL using Playwright for JS-rendered content. Returns HTML."""
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as p:
@@ -299,7 +318,6 @@ async def _fetch_with_playwright(url: str) -> str:
 # ── Content extraction ────────────────────────────────────────────────────────
 
 def _extract_content(html: str) -> tuple[str | None, str | None]:
-    """Extract markdown content and title from HTML using trafilatura."""
     content = trafilatura.extract(
         html,
         output_format="markdown",
@@ -312,40 +330,31 @@ def _extract_content(html: str) -> tuple[str | None, str | None]:
     title = meta.title if meta else None
     return content, title
 
-# ── Main scrape logic ─────────────────────────────────────────────────────────
+# ── Core scrape logic (shared by /scrape and /extract) ───────────────────────
 
 async def _scrape(url: str, js_render: bool = False) -> dict[str, Any]:
-    """
-    Scrape URL and return clean LLM-ready markdown.
-    If js_render=True, uses Playwright.
-    If js_render=False, tries httpx first, falls back to Playwright if content is empty.
-    """
     js_rendered = False
 
     if js_render:
-        # Explicit JS rendering requested
         html = await _fetch_with_playwright(url)
         js_rendered = True
     else:
-        # Try static first
         html, _ = _fetch_static(url)
 
     content, title = _extract_content(html)
 
-    # Auto-fallback to Playwright if static fetch returned empty content
     if not content and not js_render:
         try:
             html = await _fetch_with_playwright(url)
             content, title = _extract_content(html)
             js_rendered = True
         except Exception:
-            pass  # Playwright fallback failed, handle below
+            pass
 
     if not content:
         raise HTTPException(
             status_code=422,
-            detail=f"Could not extract meaningful content from {url}. "
-                   "The page may be behind authentication or blocking automated access."
+            detail=f"Could not extract meaningful content from {url}."
         )
 
     return {
@@ -357,16 +366,119 @@ async def _scrape(url: str, js_render: bool = False) -> dict[str, Any]:
         "js_rendered": js_rendered,
     }
 
-# ── Protected endpoint ────────────────────────────────────────────────────────
+# ── Structured extraction via Claude ─────────────────────────────────────────
+
+async def _extract_structured(
+    markdown: str,
+    url: str,
+    fields: list[str],
+    js_rendered: bool,
+) -> dict[str, Any]:
+    """
+    Pass scraped markdown and a list of fields to Claude.
+    Returns structured JSON with extracted values.
+    """
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Structured extraction is not configured. ANTHROPIC_API_KEY is missing."
+        )
+
+    fields_str = ", ".join(f'"{f}"' for f in fields)
+    prompt = f"""You are a precise data extraction assistant. Extract the following fields from the page content below.
+
+Fields to extract: [{fields_str}]
+
+Return ONLY a valid JSON object with the requested fields as keys and the extracted values as values.
+- If a field cannot be found, set its value to null.
+- Do not include any explanation, preamble, or markdown formatting.
+- Do not wrap the JSON in code blocks.
+- Values should be clean strings, numbers, or arrays as appropriate.
+
+Page URL: {url}
+
+Page content:
+{markdown[:8000]}"""
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": EXTRACT_MODEL,
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Extraction model error: {response.status_code}"
+        )
+
+    result = response.json()
+    raw_text = result["content"][0]["text"].strip()
+
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=502,
+            detail="Extraction model returned malformed JSON."
+        )
+
+    fields_extracted = [k for k, v in data.items() if v is not None]
+
+    return {
+        "url": url,
+        "status": "success",
+        "data": data,
+        "fields_requested": fields,
+        "fields_extracted": fields_extracted,
+        "js_rendered": js_rendered,
+        "model": EXTRACT_MODEL,
+    }
+
+# ── Protected endpoints ───────────────────────────────────────────────────────
 
 @app.post("/scrape", response_model=ScrapeResponse)
 async def scrape(body: ScrapeRequest) -> dict[str, Any]:
     """
     Requires x402 payment ($0.01 USDC on Base mainnet).
-    Returns clean LLM-ready markdown extracted from the target URL.
+    Returns clean LLM-ready markdown from any URL.
     Set js_render=true for JS-heavy SPAs and dynamic sites.
     """
     return await _scrape(body.url, body.js_render)
+
+
+@app.post("/extract", response_model=ExtractResponse)
+async def extract(body: ExtractRequest) -> dict[str, Any]:
+    """
+    Requires x402 payment ($0.05 USDC on Base mainnet).
+    Extracts specific fields from any URL as clean structured JSON.
+    Pass a list of field names and receive typed values back.
+
+    Example:
+        { "url": "https://example.com/product", "fields": ["price", "title", "availability"] }
+    """
+    if not body.fields:
+        raise HTTPException(status_code=422, detail="At least one field must be specified.")
+    if len(body.fields) > 20:
+        raise HTTPException(status_code=422, detail="Maximum 20 fields per request.")
+
+    scrape_result = await _scrape(body.url, body.js_render)
+    return await _extract_structured(
+        markdown=scrape_result["content"],
+        url=body.url,
+        fields=body.fields,
+        js_rendered=scrape_result["js_rendered"],
+    )
 
 # ── Free meta endpoints ───────────────────────────────────────────────────────
 
@@ -374,104 +486,120 @@ async def scrape(body: ScrapeRequest) -> dict[str, Any]:
 async def root() -> dict[str, Any]:
     return {
         "name": "TerraDeed Scrape API",
-        "version": "0.5.0",
-        "capabilities": ["static-scraping", "js-rendering"],
+        "version": "0.6.0",
+        "capabilities": ["static-scraping", "js-rendering", "structured-extraction"],
         "endpoints": {
             "POST /scrape": {
                 "protected": True,
-                "price": PRICE,
+                "price": SCRAPE_PRICE,
                 "network": NETWORK,
+                "description": "Clean LLM-ready markdown from any URL",
                 "body": {
                     "url": "string (required)",
                     "js_render": "boolean (optional, default false)",
                 },
-            }
+            },
+            "POST /extract": {
+                "protected": True,
+                "price": EXTRACT_PRICE,
+                "network": NETWORK,
+                "description": "Schema-driven structured JSON extraction",
+                "body": {
+                    "url": "string (required)",
+                    "fields": "list[string] (required) — fields to extract",
+                    "js_render": "boolean (optional, default false)",
+                },
+            },
         },
         "payment": {"protocol": "x402", "facilitator": FACILITATOR},
         "docs": "/docs",
     }
 
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     cdp_configured = bool(CDP_API_KEY_ID and CDP_API_KEY_SECRET)
+    anthropic_configured = bool(ANTHROPIC_API_KEY)
     return {
         "status": "ok",
-        "version": "0.5.0",
+        "version": "0.6.0",
         "cdp_auth": "configured" if cdp_configured else "missing",
+        "anthropic": "configured" if anthropic_configured else "missing",
         "network": NETWORK,
-        "capabilities": "static+js-rendering",
+        "capabilities": "static+js-rendering+structured-extraction",
     }
+
 
 @app.get("/bazaar.json")
 async def bazaar_manifest() -> dict[str, Any]:
-    """Static Bazaar discovery manifest."""
     return {
         "resources": [
             {
                 "url": f"{BASE_URL}/scrape",
                 "method": "POST",
                 "name": "TerraDeed Web Scraper",
-                "description": "Pay-per-use web scraping API. Extracts clean LLM-ready markdown from any URL including JS-rendered SPAs. Returns title, word count, and content.",
+                "description": "Pay-per-use web scraping. Extracts clean LLM-ready markdown from any URL including JS-rendered SPAs.",
                 "category": "search",
                 "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent", "playwright", "js-rendering"],
                 "input": {"url": "https://example.com", "js_render": False},
+                "pricing": {"amount": "0.01", "currency": "USDC", "network": "eip155:8453"},
+            },
+            {
+                "url": f"{BASE_URL}/extract",
+                "method": "POST",
+                "name": "TerraDeed Structured Extractor",
+                "description": "Schema-driven structured JSON extraction from any URL. Pass a list of fields and receive clean, typed JSON.",
+                "category": "search",
+                "tags": ["extraction", "structured-data", "json", "llm", "ai-agent", "schema"],
+                "input": {"url": "https://example.com/product", "fields": ["price", "title", "availability"], "js_render": False},
                 "output": {
-                    "description": "Clean LLM-ready markdown extracted from the target URL, with title, word count, and render method.",
+                    "description": "Structured JSON with extracted field values.",
                     "content_type": "application/json",
                     "example": {
-                        "content": "## Example Domain\n\nThis domain is for use in illustrative examples.",
-                        "url": "https://example.com",
+                        "url": "https://example.com/product",
                         "status": "success",
-                        "word_count": 14,
-                        "title": "Example Domain",
+                        "data": {"price": "$29.99", "title": "Example Product", "availability": "In stock"},
+                        "fields_requested": ["price", "title", "availability"],
+                        "fields_extracted": ["price", "title", "availability"],
                         "js_rendered": False,
                     },
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "content": {"type": "string", "description": "Clean LLM-ready markdown extracted from the URL"},
-                            "url": {"type": "string", "description": "The URL that was scraped"},
-                            "status": {"type": "string", "description": "success or error"},
-                            "word_count": {"type": "integer", "description": "Number of words in extracted content"},
-                            "title": {"type": "string", "description": "Page title"},
-                            "js_rendered": {"type": "boolean", "description": "Whether Playwright JS rendering was used"},
-                        },
-                        "required": ["content", "url", "status"],
-                    }
                 },
-                "pricing": {
-                    "amount": "0.01",
-                    "currency": "USDC",
-                    "network": "eip155:8453",
-                }
-            }
+                "pricing": {"amount": "0.05", "currency": "USDC", "network": "eip155:8453"},
+            },
         ]
     }
 
+
 @app.get("/.well-known/x402")
 async def well_known_x402() -> dict[str, Any]:
-    """Standard x402 discovery endpoint for crawlers and indexers."""
     return {
         "version": 2,
         "resources": [
             {
                 "url": f"{BASE_URL}/scrape",
                 "method": "POST",
-                "description": "Pay-per-use web scraping API. Extracts clean LLM-ready markdown from any URL. Supports JS rendering for SPAs.",
-                "accepts": X402_ACCEPTS,
+                "description": "Pay-per-use web scraping. LLM-ready markdown from any URL. Supports JS rendering.",
+                "accepts": SCRAPE_ACCEPTS,
                 "info": {
                     "name": "TerraDeed Web Scraper",
                     "category": "search",
-                    "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent", "playwright", "js-rendering"],
-                    "input": {"url": "https://example.com", "js_render": False},
-                    "output": {
-                        "description": "Clean LLM-ready markdown with title, word count, and render method.",
-                        "content_type": "application/json",
-                    }
-                }
-            }
-        ]
+                    "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent", "playwright"],
+                },
+            },
+            {
+                "url": f"{BASE_URL}/extract",
+                "method": "POST",
+                "description": "Schema-driven structured JSON extraction. Pass fields, receive typed JSON.",
+                "accepts": EXTRACT_ACCEPTS,
+                "info": {
+                    "name": "TerraDeed Structured Extractor",
+                    "category": "search",
+                    "tags": ["extraction", "structured-data", "json", "llm", "ai-agent", "schema"],
+                },
+            },
+        ],
     }
+
 
 if __name__ == "__main__":
     import uvicorn
