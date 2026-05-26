@@ -11,6 +11,7 @@ Set these env vars in Railway:
     CDP_API_KEY_SECRET=your-secret
 """
 
+import json
 import os
 from typing import Any, Optional
 
@@ -37,9 +38,73 @@ PRICE       = "$0.01"
 NETWORK     = "eip155:8453"          # Base mainnet
 FACILITATOR = "https://facilitator.xpay.sh"
 BASE_URL    = "https://api.terradeed.co.uk"
+USDC_BASE   = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
 CDP_API_KEY_ID     = os.environ.get("CDP_API_KEY_ID", "")
 CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
+
+# ── x402 accepts array (shared between middleware and 402 body) ───────────────
+
+X402_ACCEPTS = [
+    {
+        "scheme": "exact",
+        "network": NETWORK,
+        "asset": USDC_BASE,
+        "amount": "10000",
+        "payTo": PAY_TO,
+    }
+]
+
+# ── ASGI middleware: injects accepts array into 402 response body ─────────────
+
+class X402ResponseBodyMiddleware:
+    """
+    Wraps the payment middleware and ensures every 402 response includes
+    the x402 v2 accepts array in the body.
+    Required for strict-v2 badge from validators like mapper-mcp.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+        self._body = json.dumps({
+            "x402Version": 2,
+            "accepts": X402_ACCEPTS,
+            "error": "Payment required",
+        }).encode()
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        status_code: Optional[int] = None
+
+        async def send_wrapper(message: Any) -> None:
+            nonlocal status_code
+
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+                if status_code == 402:
+                    headers = {k: v for k, v in message.get("headers", [])}
+                    headers[b"content-type"] = b"application/json"
+                    headers[b"content-length"] = str(len(self._body)).encode()
+                    message = {
+                        "type": "http.response.start",
+                        "status": 402,
+                        "headers": list(headers.items()),
+                    }
+
+            elif message["type"] == "http.response.body" and status_code == 402:
+                message = {
+                    "type": "http.response.body",
+                    "body": self._body,
+                    "more_body": False,
+                }
+
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
 
 # ── CDP JWT Auth Provider ─────────────────────────────────────────────────────
 
@@ -83,7 +148,7 @@ def _build_cdp_auth_provider() -> CreateHeadersAuthProvider | None:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping. Returns clean LLM-ready markdown via x402 USDC micropayments. Supports JS rendering via Playwright.",
-    version="0.4.0",
+    version="0.5.0",
 )
 
 # ── x402 payment infrastructure ───────────────────────────────────────────────
@@ -140,25 +205,29 @@ routes: dict[str, RouteConfig] = {
                             "js_rendered": False,
                         },
                     },
-                },
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string", "description": "Clean LLM-ready markdown extracted from the URL"},
-                        "url": {"type": "string", "description": "The URL that was scraped"},
-                        "status": {"type": "string", "description": "success or error"},
-                        "word_count": {"type": "integer", "description": "Number of words in extracted content"},
-                        "title": {"type": "string", "description": "Page title"},
-                        "js_rendered": {"type": "boolean", "description": "Whether Playwright JS rendering was used"},
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string", "description": "Clean LLM-ready markdown extracted from the URL"},
+                            "url": {"type": "string", "description": "The URL that was scraped"},
+                            "status": {"type": "string", "description": "success or error"},
+                            "word_count": {"type": "integer", "description": "Number of words in extracted content"},
+                            "title": {"type": "string", "description": "Page title"},
+                            "js_rendered": {"type": "boolean", "description": "Whether Playwright JS rendering was used"},
+                        },
+                        "required": ["content", "url", "status"],
                     },
-                    "required": ["content", "url", "status"],
                 },
             }
         },
     ),
 }
 
+# PaymentMiddlewareASGI added first = sits inner (closer to app)
 app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
+
+# X402ResponseBodyMiddleware added second = sits outer (sees 402 responses last)
+app.add_middleware(X402ResponseBodyMiddleware)
 
 # ── Request / Response models ─────────────────────────────────────────────────
 
@@ -305,7 +374,7 @@ async def scrape(body: ScrapeRequest) -> dict[str, Any]:
 async def root() -> dict[str, Any]:
     return {
         "name": "TerraDeed Scrape API",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "capabilities": ["static-scraping", "js-rendering"],
         "endpoints": {
             "POST /scrape": {
@@ -327,7 +396,7 @@ async def health() -> dict[str, str]:
     cdp_configured = bool(CDP_API_KEY_ID and CDP_API_KEY_SECRET)
     return {
         "status": "ok",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "cdp_auth": "configured" if cdp_configured else "missing",
         "network": NETWORK,
         "capabilities": "static+js-rendering",
@@ -389,15 +458,7 @@ async def well_known_x402() -> dict[str, Any]:
                 "url": f"{BASE_URL}/scrape",
                 "method": "POST",
                 "description": "Pay-per-use web scraping API. Extracts clean LLM-ready markdown from any URL. Supports JS rendering for SPAs.",
-                "accepts": [
-                    {
-                        "scheme": "exact",
-                        "network": "eip155:8453",
-                        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-                        "amount": "10000",
-                        "payTo": PAY_TO,
-                    }
-                ],
+                "accepts": X402_ACCEPTS,
                 "info": {
                     "name": "TerraDeed Web Scraper",
                     "category": "search",
