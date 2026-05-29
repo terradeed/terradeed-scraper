@@ -54,8 +54,18 @@ CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
 ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # ── x402 accepts arrays ───────────────────────────────────────────────────────
-# Full schema required by x402-fetch (@coinbase/x402 v2.1.0) Zod validation.
-# outputSchema and extra are omitted (not null) — Zod expects object or absent.
+# extra.name and extra.version are critical for EIP-712 domain alignment.
+#
+# The x402 JS SDK signAuthorization() uses extra?.name and extra?.version
+# when building the EIP-712 domain for signing. Without these, name/version
+# are undefined and excluded from the domain hash. The server's verify()
+# falls back to config["8453"].usdcName ("USD Coin") and getVersion() ("2"),
+# producing a different domain and an invalid signature recovery.
+#
+# Providing extra.name and extra.version explicitly forces both signing and
+# verification to use the same EIP-712 domain — making the signature valid.
+
+USDC_EXTRA = {"name": "USD Coin", "version": "2"}
 
 SCRAPE_ACCEPTS = [
     {
@@ -68,6 +78,7 @@ SCRAPE_ACCEPTS = [
         "description": "Scrape any public URL — clean LLM-ready markdown",
         "mimeType": "application/json",
         "maxTimeoutSeconds": 300,
+        "extra": USDC_EXTRA,
     }
 ]
 
@@ -82,6 +93,7 @@ EXTRACT_ACCEPTS = [
         "description": "Schema-driven structured JSON extraction from any URL",
         "mimeType": "application/json",
         "maxTimeoutSeconds": 300,
+        "extra": USDC_EXTRA,
     }
 ]
 
