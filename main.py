@@ -5,7 +5,7 @@ Wallet:    0x4E024e356bd01853654b7B5196F2B85F67Cc39EC  (Base mainnet)
 Endpoints:
     POST /scrape   — $0.01 USDC — clean LLM-ready markdown from any URL
     POST /extract  — $0.05 USDC — schema-driven structured JSON extraction
-Network:   Base mainnet (base)
+Network:   Base mainnet (eip155:8453 internally / base for JS clients)
 Facilitator: xpay (https://facilitator.xpay.sh)
 
 Set these env vars in Railway:
@@ -39,8 +39,13 @@ from x402.server import x402ResourceServer
 PAY_TO           = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
 SCRAPE_PRICE     = "$0.01"
 EXTRACT_PRICE    = "$0.05"
-NETWORK          = "base"           # short name — required by x402 JS SDK
-NETWORK_CAIP2    = "eip155:8453"    # CAIP-2 format — registered alongside for compatibility
+
+# Two network representations:
+# NETWORK_INTERNAL — used by PaymentMiddlewareASGI and PaymentOption (Python SDK requires CAIP-2)
+# NETWORK_CLIENT   — advertised in 402 body to clients (JS SDK requires short name)
+NETWORK_INTERNAL = "eip155:8453"
+NETWORK_CLIENT   = "base"
+
 FACILITATOR      = "https://facilitator.xpay.sh"
 BASE_URL         = "https://api.terradeed.co.uk"
 USDC_BASE        = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
@@ -50,12 +55,14 @@ CDP_API_KEY_ID     = os.environ.get("CDP_API_KEY_ID", "")
 CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
 ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
 
-# ── x402 accepts arrays (per route, shared with 402 body middleware) ──────────
+# ── x402 accepts arrays ───────────────────────────────────────────────────────
+# These are injected into 402 response bodies by X402ResponseBodyMiddleware.
+# Use NETWORK_CLIENT ("base") so JS clients can build payment headers.
 
 SCRAPE_ACCEPTS = [
     {
         "scheme": "exact",
-        "network": NETWORK,
+        "network": NETWORK_CLIENT,
         "asset": USDC_BASE,
         "amount": "10000",       # $0.01 USDC (6 decimals)
         "payTo": PAY_TO,
@@ -65,7 +72,7 @@ SCRAPE_ACCEPTS = [
 EXTRACT_ACCEPTS = [
     {
         "scheme": "exact",
-        "network": NETWORK,
+        "network": NETWORK_CLIENT,
         "asset": USDC_BASE,
         "amount": "50000",       # $0.05 USDC (6 decimals)
         "payTo": PAY_TO,
@@ -197,9 +204,10 @@ facilitator = HTTPFacilitatorClient(
 )
 
 server = x402ResourceServer(facilitator)
-# Register both short name and CAIP-2 format for maximum client compatibility
-server.register(NETWORK, ExactEvmServerScheme())
-server.register(NETWORK_CAIP2, ExactEvmServerScheme())
+# Register both network formats so incoming payment headers are accepted
+# regardless of whether the client used "base" or "eip155:8453"
+server.register(NETWORK_INTERNAL, ExactEvmServerScheme())
+server.register(NETWORK_CLIENT, ExactEvmServerScheme())
 
 routes: dict[str, RouteConfig] = {
     "POST /scrape": RouteConfig(
@@ -208,7 +216,7 @@ routes: dict[str, RouteConfig] = {
                 scheme="exact",
                 pay_to=PAY_TO,
                 price=SCRAPE_PRICE,
-                network=NETWORK,
+                network=NETWORK_INTERNAL,   # Python SDK requires CAIP-2 format
             ),
         ],
         mime_type="application/json",
@@ -224,7 +232,7 @@ routes: dict[str, RouteConfig] = {
                 scheme="exact",
                 pay_to=PAY_TO,
                 price=EXTRACT_PRICE,
-                network=NETWORK,
+                network=NETWORK_INTERNAL,   # Python SDK requires CAIP-2 format
             ),
         ],
         mime_type="application/json",
@@ -255,15 +263,15 @@ class ScrapeResponse(BaseModel):
 
 class ExtractRequest(BaseModel):
     url: str
-    fields: list[str]           # e.g. ["price", "title", "author", "date"]
+    fields: list[str]
     js_render: bool = False
 
 class ExtractResponse(BaseModel):
     url: str
     status: str
-    data: dict[str, Any]        # extracted fields as clean JSON
+    data: dict[str, Any]
     fields_requested: list[str]
-    fields_extracted: list[str] # subset of fields_requested that were found
+    fields_extracted: list[str]
     js_rendered: bool = False
     model: str = EXTRACT_MODEL
 
@@ -333,7 +341,7 @@ def _extract_content(html: str) -> tuple[str | None, str | None]:
     title = meta.title if meta else None
     return content, title
 
-# ── Core scrape logic (shared by /scrape and /extract) ───────────────────────
+# ── Core scrape logic ─────────────────────────────────────────────────────────
 
 async def _scrape(url: str, js_render: bool = False) -> dict[str, Any]:
     js_rendered = False
@@ -377,10 +385,6 @@ async def _extract_structured(
     fields: list[str],
     js_rendered: bool,
 ) -> dict[str, Any]:
-    """
-    Pass scraped markdown and a list of fields to Claude.
-    Returns structured JSON with extracted values.
-    """
     if not ANTHROPIC_API_KEY:
         raise HTTPException(
             status_code=503,
@@ -452,24 +456,11 @@ Page content:
 
 @app.post("/scrape", response_model=ScrapeResponse)
 async def scrape(body: ScrapeRequest) -> dict[str, Any]:
-    """
-    Requires x402 payment ($0.01 USDC on Base mainnet).
-    Returns clean LLM-ready markdown from any URL.
-    Set js_render=true for JS-heavy SPAs and dynamic sites.
-    """
     return await _scrape(body.url, body.js_render)
 
 
 @app.post("/extract", response_model=ExtractResponse)
 async def extract(body: ExtractRequest) -> dict[str, Any]:
-    """
-    Requires x402 payment ($0.05 USDC on Base mainnet).
-    Extracts specific fields from any URL as clean structured JSON.
-    Pass a list of field names and receive typed values back.
-
-    Example:
-        { "url": "https://example.com/product", "fields": ["price", "title", "availability"] }
-    """
     if not body.fields:
         raise HTTPException(status_code=422, detail="At least one field must be specified.")
     if len(body.fields) > 20:
@@ -495,23 +486,14 @@ async def root() -> dict[str, Any]:
             "POST /scrape": {
                 "protected": True,
                 "price": SCRAPE_PRICE,
-                "network": NETWORK,
+                "network": NETWORK_CLIENT,
                 "description": "Clean LLM-ready markdown from any URL",
-                "body": {
-                    "url": "string (required)",
-                    "js_render": "boolean (optional, default false)",
-                },
             },
             "POST /extract": {
                 "protected": True,
                 "price": EXTRACT_PRICE,
-                "network": NETWORK,
+                "network": NETWORK_CLIENT,
                 "description": "Schema-driven structured JSON extraction",
-                "body": {
-                    "url": "string (required)",
-                    "fields": "list[string] (required) — fields to extract",
-                    "js_render": "boolean (optional, default false)",
-                },
             },
         },
         "payment": {"protocol": "x402", "facilitator": FACILITATOR},
@@ -528,7 +510,7 @@ async def health() -> dict[str, str]:
         "version": "0.6.0",
         "cdp_auth": "configured" if cdp_configured else "missing",
         "anthropic": "configured" if anthropic_configured else "missing",
-        "network": NETWORK,
+        "network": NETWORK_CLIENT,
         "capabilities": "static+js-rendering+structured-extraction",
     }
 
@@ -545,7 +527,7 @@ async def bazaar_manifest() -> dict[str, Any]:
                 "category": "search",
                 "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent", "playwright", "js-rendering"],
                 "input": {"url": "https://example.com", "js_render": False},
-                "pricing": {"amount": "0.01", "currency": "USDC", "network": NETWORK},
+                "pricing": {"amount": "0.01", "currency": "USDC", "network": NETWORK_CLIENT},
             },
             {
                 "url": f"{BASE_URL}/extract",
@@ -555,19 +537,7 @@ async def bazaar_manifest() -> dict[str, Any]:
                 "category": "search",
                 "tags": ["extraction", "structured-data", "json", "llm", "ai-agent", "schema"],
                 "input": {"url": "https://example.com/product", "fields": ["price", "title", "availability"], "js_render": False},
-                "output": {
-                    "description": "Structured JSON with extracted field values.",
-                    "content_type": "application/json",
-                    "example": {
-                        "url": "https://example.com/product",
-                        "status": "success",
-                        "data": {"price": "$29.99", "title": "Example Product", "availability": "In stock"},
-                        "fields_requested": ["price", "title", "availability"],
-                        "fields_extracted": ["price", "title", "availability"],
-                        "js_rendered": False,
-                    },
-                },
-                "pricing": {"amount": "0.05", "currency": "USDC", "network": NETWORK},
+                "pricing": {"amount": "0.05", "currency": "USDC", "network": NETWORK_CLIENT},
             },
         ]
     }
