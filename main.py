@@ -41,10 +41,6 @@ PAY_TO           = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
 SCRAPE_PRICE     = "$0.01"
 EXTRACT_PRICE    = "$0.05"
 
-# NETWORK_INTERNAL: used by PaymentMiddlewareASGI, server.register, and xpay.sh verification.
-#   Python x402 SDK and xpay.sh require CAIP-2 format.
-# NETWORK_CLIENT: advertised in 402 response bodies.
-#   JS x402 SDK (x402-fetch / @coinbase/x402) requires short name.
 NETWORK_INTERNAL = "eip155:8453"
 NETWORK_CLIENT   = "base"
 
@@ -59,21 +55,19 @@ ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # ── x402 accepts arrays ───────────────────────────────────────────────────────
 # Full schema required by x402-fetch (@coinbase/x402 v2.1.0) Zod validation.
-# Injected into 402 response bodies by X402ResponseBodyMiddleware.
+# outputSchema and extra are omitted (not null) — Zod expects object or absent.
 
 SCRAPE_ACCEPTS = [
     {
         "scheme": "exact",
         "network": NETWORK_CLIENT,
         "asset": USDC_BASE,
-        "maxAmountRequired": "10000",   # $0.01 USDC (6 decimals)
+        "maxAmountRequired": "10000",
         "payTo": PAY_TO,
         "resource": f"{BASE_URL}/scrape",
         "description": "Scrape any public URL — clean LLM-ready markdown",
         "mimeType": "application/json",
         "maxTimeoutSeconds": 300,
-        "outputSchema": None,
-        "extra": None,
     }
 ]
 
@@ -82,14 +76,12 @@ EXTRACT_ACCEPTS = [
         "scheme": "exact",
         "network": NETWORK_CLIENT,
         "asset": USDC_BASE,
-        "maxAmountRequired": "50000",   # $0.05 USDC (6 decimals)
+        "maxAmountRequired": "50000",
         "payTo": PAY_TO,
         "resource": f"{BASE_URL}/extract",
         "description": "Schema-driven structured JSON extraction from any URL",
         "mimeType": "application/json",
         "maxTimeoutSeconds": 300,
-        "outputSchema": None,
-        "extra": None,
     }
 ]
 
@@ -101,15 +93,6 @@ ROUTE_ACCEPTS = {
 # ── Network normalisation middleware ──────────────────────────────────────────
 
 class NetworkNormalisationMiddleware:
-    """
-    Rewrites 'base' → 'eip155:8453' in incoming X-Payment headers before the
-    payment middleware processes them. The network string is not part of the
-    EIP-3009 signed payload so this does not affect signature validity.
-
-    Bridges x402-fetch / @coinbase/x402 (signs with "base") and the Python
-    x402 SDK / xpay.sh facilitator (requires "eip155:8453" for chain lookup).
-    """
-
     def __init__(self, app: Any) -> None:
         self.app = app
 
@@ -123,26 +106,17 @@ class NetworkNormalisationMiddleware:
                         decoded = json.loads(base64.b64decode(value).decode("utf-8"))
                         if decoded.get("network") == NETWORK_CLIENT:
                             decoded["network"] = NETWORK_INTERNAL
-                            value = base64.b64encode(
-                                json.dumps(decoded).encode("utf-8")
-                            )
+                            value = base64.b64encode(json.dumps(decoded).encode("utf-8"))
                     except Exception:
                         pass
                 new_headers.append((name, value))
             scope = {**scope, "headers": new_headers}
-
         await self.app(scope, receive, send)
 
 
 # ── ASGI middleware: injects accepts array into 402 response body ─────────────
 
 class X402ResponseBodyMiddleware:
-    """
-    Intercepts 402 responses and injects the correct x402 v2 accepts array
-    into the body. Route-aware — returns the accepts array for the specific
-    endpoint being accessed.
-    """
-
     def __init__(self, app: Any, route_accepts: dict[str, list]) -> None:
         self.app = app
         self.route_accepts = route_accepts
@@ -150,11 +124,7 @@ class X402ResponseBodyMiddleware:
     def _build_body(self, method: str, path: str) -> bytes:
         route_key = f"{method} {path}"
         accepts = self.route_accepts.get(route_key, [])
-        return json.dumps({
-            "x402Version": 2,
-            "accepts": accepts,
-            "error": "Payment required",
-        }).encode()
+        return json.dumps({"x402Version": 2, "accepts": accepts, "error": "Payment required"}).encode()
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
@@ -168,26 +138,15 @@ class X402ResponseBodyMiddleware:
 
         async def send_wrapper(message: Any) -> None:
             nonlocal status_code
-
             if message["type"] == "http.response.start":
                 status_code = message["status"]
                 if status_code == 402:
                     headers = {k: v for k, v in message.get("headers", [])}
                     headers[b"content-type"] = b"application/json"
                     headers[b"content-length"] = str(len(body)).encode()
-                    message = {
-                        "type": "http.response.start",
-                        "status": 402,
-                        "headers": list(headers.items()),
-                    }
-
+                    message = {"type": "http.response.start", "status": 402, "headers": list(headers.items())}
             elif message["type"] == "http.response.body" and status_code == 402:
-                message = {
-                    "type": "http.response.body",
-                    "body": body,
-                    "more_body": False,
-                }
-
+                message = {"type": "http.response.body", "body": body, "more_body": False}
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
@@ -198,33 +157,24 @@ class X402ResponseBodyMiddleware:
 def _build_cdp_auth_provider() -> CreateHeadersAuthProvider | None:
     if not CDP_API_KEY_ID or not CDP_API_KEY_SECRET:
         return None
-
     try:
         from cdp.auth import GetAuthHeadersOptions, get_auth_headers
-
         CDP_HOST      = "api.cdp.coinbase.com"
         CDP_BASE_PATH = "/platform/v2/x402"
 
         def create_headers() -> dict[str, dict[str, str]]:
             def _auth(method: str, path: str) -> dict[str, str]:
                 opts = GetAuthHeadersOptions(
-                    api_key_id=CDP_API_KEY_ID,
-                    api_key_secret=CDP_API_KEY_SECRET,
-                    request_method=method,
-                    request_host=CDP_HOST,
-                    request_path=path,
+                    api_key_id=CDP_API_KEY_ID, api_key_secret=CDP_API_KEY_SECRET,
+                    request_method=method, request_host=CDP_HOST, request_path=path,
                 )
-                headers = get_auth_headers(opts)
-                return {"Authorization": headers["Authorization"]}
-
+                return {"Authorization": get_auth_headers(opts)["Authorization"]}
             return {
                 "verify":    _auth("POST", f"{CDP_BASE_PATH}/verify"),
                 "settle":    _auth("POST", f"{CDP_BASE_PATH}/settle"),
                 "supported": _auth("GET",  f"{CDP_BASE_PATH}/supported"),
             }
-
         return CreateHeadersAuthProvider(create_headers)
-
     except ImportError:
         print("WARNING: cdp-sdk not installed.")
         return None
@@ -234,64 +184,33 @@ def _build_cdp_auth_provider() -> CreateHeadersAuthProvider | None:
 
 app = FastAPI(
     title="TerraDeed Scrape API",
-    description=(
-        "Pay-per-use web scraping and structured data extraction via x402 USDC micropayments. "
-        "POST /scrape — LLM-ready markdown ($0.01). "
-        "POST /extract — Schema-driven structured JSON ($0.05)."
-    ),
+    description="Pay-per-use web scraping and structured data extraction via x402 USDC micropayments.",
     version="0.6.0",
 )
 
-# ── x402 payment infrastructure ───────────────────────────────────────────────
-
 auth_provider = _build_cdp_auth_provider()
-
-facilitator = HTTPFacilitatorClient(
-    FacilitatorConfig(
-        url=FACILITATOR,
-        auth_provider=auth_provider,
-    )
-)
-
+facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=FACILITATOR, auth_provider=auth_provider))
 server = x402ResourceServer(facilitator)
 server.register(NETWORK_INTERNAL, ExactEvmServerScheme())
 
 routes: dict[str, RouteConfig] = {
     "POST /scrape": RouteConfig(
-        accepts=[
-            PaymentOption(
-                scheme="exact",
-                pay_to=PAY_TO,
-                price=SCRAPE_PRICE,
-                network=NETWORK_INTERNAL,
-            ),
-        ],
+        accepts=[PaymentOption(scheme="exact", pay_to=PAY_TO, price=SCRAPE_PRICE, network=NETWORK_INTERNAL)],
         mime_type="application/json",
         description="Scrape any public URL — clean LLM-ready markdown. $0.01 USDC on Base.",
     ),
     "POST /extract": RouteConfig(
-        accepts=[
-            PaymentOption(
-                scheme="exact",
-                pay_to=PAY_TO,
-                price=EXTRACT_PRICE,
-                network=NETWORK_INTERNAL,
-            ),
-        ],
+        accepts=[PaymentOption(scheme="exact", pay_to=PAY_TO, price=EXTRACT_PRICE, network=NETWORK_INTERNAL)],
         mime_type="application/json",
         description="Schema-driven structured JSON extraction. $0.05 USDC on Base.",
     ),
 }
 
-# Middleware stack (last added runs first on requests):
-# 1. NetworkNormalisationMiddleware — rewrites "base" → "eip155:8453" in X-Payment
-# 2. PaymentMiddlewareASGI          — validates payment, returns 402 if missing/invalid
-# 3. X402ResponseBodyMiddleware     — rewrites 402 body with full schema for JS clients
 app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
 app.add_middleware(X402ResponseBodyMiddleware, route_accepts=ROUTE_ACCEPTS)
 app.add_middleware(NetworkNormalisationMiddleware)
 
-# ── Request / Response models ─────────────────────────────────────────────────
+# ── Models ────────────────────────────────────────────────────────────────────
 
 class ScrapeRequest(BaseModel):
     url: str
@@ -322,13 +241,7 @@ class ExtractResponse(BaseModel):
 # ── Static scraping ───────────────────────────────────────────────────────────
 
 def _fetch_static(url: str) -> tuple[str, str | None]:
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     try:
         response = httpx.get(url, headers=headers, follow_redirects=True, timeout=15)
         response.raise_for_status()
@@ -340,23 +253,14 @@ def _fetch_static(url: str) -> tuple[str, str | None]:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch {url}: {str(e)}")
 
-# ── JS rendering (Playwright) ─────────────────────────────────────────────────
+# ── JS rendering ──────────────────────────────────────────────────────────────
 
 async def _fetch_with_playwright(url: str) -> str:
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-            )
-            context = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                )
-            )
+            browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
+            context = await browser.new_context(user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             page = await context.new_page()
             await page.goto(url, wait_until="networkidle", timeout=30000)
             html = await page.content()
@@ -368,23 +272,14 @@ async def _fetch_with_playwright(url: str) -> str:
 # ── Content extraction ────────────────────────────────────────────────────────
 
 def _extract_content(html: str) -> tuple[str | None, str | None]:
-    content = trafilatura.extract(
-        html,
-        output_format="markdown",
-        include_links=False,
-        include_images=False,
-        include_tables=True,
-        no_fallback=False,
-    )
+    content = trafilatura.extract(html, output_format="markdown", include_links=False, include_images=False, include_tables=True, no_fallback=False)
     meta = trafilatura.extract_metadata(html)
-    title = meta.title if meta else None
-    return content, title
+    return content, (meta.title if meta else None)
 
 # ── Core scrape logic ─────────────────────────────────────────────────────────
 
 async def _scrape(url: str, js_render: bool = False) -> dict[str, Any]:
     js_rendered = False
-
     if js_render:
         html = await _fetch_with_playwright(url)
         js_rendered = True
@@ -404,75 +299,45 @@ async def _scrape(url: str, js_render: bool = False) -> dict[str, Any]:
     if not content:
         raise HTTPException(status_code=422, detail=f"Could not extract meaningful content from {url}.")
 
-    return {
-        "content": content,
-        "url": url,
-        "status": "success",
-        "word_count": len(content.split()),
-        "title": title,
-        "js_rendered": js_rendered,
-    }
+    return {"content": content, "url": url, "status": "success", "word_count": len(content.split()), "title": title, "js_rendered": js_rendered}
 
-# ── Structured extraction via Claude ─────────────────────────────────────────
+# ── Structured extraction ─────────────────────────────────────────────────────
 
 async def _extract_structured(markdown: str, url: str, fields: list[str], js_rendered: bool) -> dict[str, Any]:
     if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=503, detail="Structured extraction not configured. ANTHROPIC_API_KEY missing.")
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY missing.")
 
     fields_str = ", ".join(f'"{f}"' for f in fields)
-    prompt = f"""You are a precise data extraction assistant. Extract the following fields from the page content below.
+    prompt = f"""Extract the following fields from the page content below.
 
-Fields to extract: [{fields_str}]
+Fields: [{fields_str}]
 
-Return ONLY a valid JSON object with the requested fields as keys and the extracted values as values.
-- If a field cannot be found, set its value to null.
-- Do not include any explanation, preamble, or markdown formatting.
-- Do not wrap the JSON in code blocks.
-- Values should be clean strings, numbers, or arrays as appropriate.
+Return ONLY a valid JSON object. Set missing fields to null. No explanation, no markdown.
 
-Page URL: {url}
+URL: {url}
 
-Page content:
+Content:
 {markdown[:8000]}"""
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": EXTRACT_MODEL,
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": prompt}],
-            },
+            headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": EXTRACT_MODEL, "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]},
             timeout=30,
         )
 
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Extraction model error: {response.status_code}")
 
-    result = response.json()
-    raw_text = result["content"][0]["text"].strip()
-
     try:
-        data = json.loads(raw_text)
+        data = json.loads(response.json()["content"][0]["text"].strip())
     except json.JSONDecodeError:
         raise HTTPException(status_code=502, detail="Extraction model returned malformed JSON.")
 
-    return {
-        "url": url,
-        "status": "success",
-        "data": data,
-        "fields_requested": fields,
-        "fields_extracted": [k for k, v in data.items() if v is not None],
-        "js_rendered": js_rendered,
-        "model": EXTRACT_MODEL,
-    }
+    return {"url": url, "status": "success", "data": data, "fields_requested": fields, "fields_extracted": [k for k, v in data.items() if v is not None], "js_rendered": js_rendered, "model": EXTRACT_MODEL}
 
-# ── Protected endpoints ───────────────────────────────────────────────────────
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.post("/scrape", response_model=ScrapeResponse)
 async def scrape(body: ScrapeRequest) -> dict[str, Any]:
@@ -488,59 +353,23 @@ async def extract(body: ExtractRequest) -> dict[str, Any]:
     scrape_result = await _scrape(body.url, body.js_render)
     return await _extract_structured(scrape_result["content"], body.url, body.fields, scrape_result["js_rendered"])
 
-# ── Free meta endpoints ───────────────────────────────────────────────────────
 
 @app.get("/")
 async def root() -> dict[str, Any]:
-    return {
-        "name": "TerraDeed Scrape API",
-        "version": "0.6.0",
-        "capabilities": ["static-scraping", "js-rendering", "structured-extraction"],
-        "endpoints": {
-            "POST /scrape":  {"protected": True, "price": SCRAPE_PRICE, "network": NETWORK_CLIENT},
-            "POST /extract": {"protected": True, "price": EXTRACT_PRICE, "network": NETWORK_CLIENT},
-        },
-        "payment": {"protocol": "x402", "facilitator": FACILITATOR},
-        "docs": "/docs",
-    }
+    return {"name": "TerraDeed Scrape API", "version": "0.6.0", "endpoints": {"POST /scrape": {"price": SCRAPE_PRICE}, "POST /extract": {"price": EXTRACT_PRICE}}, "payment": {"protocol": "x402", "network": NETWORK_CLIENT, "facilitator": FACILITATOR}, "docs": "/docs"}
 
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {
-        "status": "ok",
-        "version": "0.6.0",
-        "cdp_auth": "configured" if CDP_API_KEY_ID and CDP_API_KEY_SECRET else "missing",
-        "anthropic": "configured" if ANTHROPIC_API_KEY else "missing",
-        "network": NETWORK_CLIENT,
-        "capabilities": "static+js-rendering+structured-extraction",
-    }
+    return {"status": "ok", "version": "0.6.0", "cdp_auth": "configured" if CDP_API_KEY_ID else "missing", "anthropic": "configured" if ANTHROPIC_API_KEY else "missing", "network": NETWORK_CLIENT, "capabilities": "static+js-rendering+structured-extraction"}
 
 
 @app.get("/bazaar.json")
 async def bazaar_manifest() -> dict[str, Any]:
     return {
         "resources": [
-            {
-                "url": f"{BASE_URL}/scrape",
-                "method": "POST",
-                "name": "TerraDeed Web Scraper",
-                "description": "Pay-per-use web scraping. Clean LLM-ready markdown from any URL, including JS-rendered SPAs.",
-                "category": "search",
-                "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent", "playwright", "js-rendering"],
-                "input": {"url": "https://example.com", "js_render": False},
-                "pricing": {"amount": "0.01", "currency": "USDC", "network": NETWORK_CLIENT},
-            },
-            {
-                "url": f"{BASE_URL}/extract",
-                "method": "POST",
-                "name": "TerraDeed Structured Extractor",
-                "description": "Schema-driven structured JSON extraction. Pass fields, receive typed JSON.",
-                "category": "search",
-                "tags": ["extraction", "structured-data", "json", "llm", "ai-agent", "schema"],
-                "input": {"url": "https://example.com/product", "fields": ["price", "title", "availability"]},
-                "pricing": {"amount": "0.05", "currency": "USDC", "network": NETWORK_CLIENT},
-            },
+            {"url": f"{BASE_URL}/scrape", "method": "POST", "name": "TerraDeed Web Scraper", "description": "Pay-per-use web scraping. Clean LLM-ready markdown from any URL, including JS-rendered SPAs.", "category": "search", "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent", "playwright"], "input": {"url": "https://example.com", "js_render": False}, "pricing": {"amount": "0.01", "currency": "USDC", "network": NETWORK_CLIENT}},
+            {"url": f"{BASE_URL}/extract", "method": "POST", "name": "TerraDeed Structured Extractor", "description": "Schema-driven structured JSON extraction. Pass fields, receive typed JSON.", "category": "search", "tags": ["extraction", "structured-data", "json", "llm", "ai-agent"], "input": {"url": "https://example.com/product", "fields": ["price", "title", "availability"]}, "pricing": {"amount": "0.05", "currency": "USDC", "network": NETWORK_CLIENT}},
         ]
     }
 
@@ -550,22 +379,8 @@ async def well_known_x402() -> dict[str, Any]:
     return {
         "version": 2,
         "resources": [
-            {
-                "url": f"{BASE_URL}/scrape",
-                "method": "POST",
-                "description": "Pay-per-use web scraping. LLM-ready markdown from any URL. Supports JS rendering.",
-                "accepts": SCRAPE_ACCEPTS,
-                "info": {"name": "TerraDeed Web Scraper", "category": "search",
-                         "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent"]},
-            },
-            {
-                "url": f"{BASE_URL}/extract",
-                "method": "POST",
-                "description": "Schema-driven structured JSON extraction. Pass fields, receive typed JSON.",
-                "accepts": EXTRACT_ACCEPTS,
-                "info": {"name": "TerraDeed Structured Extractor", "category": "search",
-                         "tags": ["extraction", "structured-data", "json", "llm", "ai-agent"]},
-            },
+            {"url": f"{BASE_URL}/scrape", "method": "POST", "description": "LLM-ready markdown from any URL.", "accepts": SCRAPE_ACCEPTS, "info": {"name": "TerraDeed Web Scraper", "category": "search", "tags": ["scraping", "web-data", "markdown", "llm"]}},
+            {"url": f"{BASE_URL}/extract", "method": "POST", "description": "Schema-driven structured JSON extraction.", "accepts": EXTRACT_ACCEPTS, "info": {"name": "TerraDeed Structured Extractor", "category": "search", "tags": ["extraction", "structured-data", "json", "llm"]}},
         ],
     }
 
