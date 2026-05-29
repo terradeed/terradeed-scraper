@@ -5,7 +5,7 @@ Wallet:    0x4E024e356bd01853654b7B5196F2B85F67Cc39EC  (Base mainnet)
 Endpoints:
     POST /scrape   — $0.01 USDC — clean LLM-ready markdown from any URL
     POST /extract  — $0.05 USDC — schema-driven structured JSON extraction
-Network:   Base mainnet (eip155:8453)
+Network:   Base mainnet (base)
 Facilitator: xpay (https://facilitator.xpay.sh)
 
 Set these env vars in Railway:
@@ -39,7 +39,8 @@ from x402.server import x402ResourceServer
 PAY_TO           = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
 SCRAPE_PRICE     = "$0.01"
 EXTRACT_PRICE    = "$0.05"
-NETWORK          = "eip155:8453"
+NETWORK          = "base"           # short name — required by x402 JS SDK
+NETWORK_CAIP2    = "eip155:8453"    # CAIP-2 format — registered alongside for compatibility
 FACILITATOR      = "https://facilitator.xpay.sh"
 BASE_URL         = "https://api.terradeed.co.uk"
 USDC_BASE        = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
@@ -196,7 +197,9 @@ facilitator = HTTPFacilitatorClient(
 )
 
 server = x402ResourceServer(facilitator)
+# Register both short name and CAIP-2 format for maximum client compatibility
 server.register(NETWORK, ExactEvmServerScheme())
+server.register(NETWORK_CAIP2, ExactEvmServerScheme())
 
 routes: dict[str, RouteConfig] = {
     "POST /scrape": RouteConfig(
@@ -542,7 +545,7 @@ async def bazaar_manifest() -> dict[str, Any]:
                 "category": "search",
                 "tags": ["scraping", "web-data", "markdown", "llm", "ai-agent", "playwright", "js-rendering"],
                 "input": {"url": "https://example.com", "js_render": False},
-                "pricing": {"amount": "0.01", "currency": "USDC", "network": "eip155:8453"},
+                "pricing": {"amount": "0.01", "currency": "USDC", "network": NETWORK},
             },
             {
                 "url": f"{BASE_URL}/extract",
@@ -564,7 +567,7 @@ async def bazaar_manifest() -> dict[str, Any]:
                         "js_rendered": False,
                     },
                 },
-                "pricing": {"amount": "0.05", "currency": "USDC", "network": "eip155:8453"},
+                "pricing": {"amount": "0.05", "currency": "USDC", "network": NETWORK},
             },
         ]
     }
