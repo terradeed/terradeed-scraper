@@ -14,6 +14,7 @@ Set these env vars in Railway:
     CDP_API_KEY_SECRET=your-secret        (optional)
 """
 
+import base64
 import json
 import os
 from typing import Any, Optional
@@ -40,9 +41,10 @@ PAY_TO           = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
 SCRAPE_PRICE     = "$0.01"
 EXTRACT_PRICE    = "$0.05"
 
-# Two network representations:
-# NETWORK_INTERNAL — used by PaymentMiddlewareASGI and PaymentOption (Python SDK requires CAIP-2)
-# NETWORK_CLIENT   — advertised in 402 body to clients (JS SDK requires short name)
+# NETWORK_INTERNAL: used by PaymentMiddlewareASGI, server.register, and xpay.sh verification.
+#   Python x402 SDK and xpay.sh require CAIP-2 format.
+# NETWORK_CLIENT: advertised in 402 response bodies.
+#   JS x402 SDK requires short name — "eip155:8453" throws "Unsupported network".
 NETWORK_INTERNAL = "eip155:8453"
 NETWORK_CLIENT   = "base"
 
@@ -56,8 +58,8 @@ CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
 ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # ── x402 accepts arrays ───────────────────────────────────────────────────────
-# These are injected into 402 response bodies by X402ResponseBodyMiddleware.
-# Use NETWORK_CLIENT ("base") so JS clients can build payment headers.
+# Injected into 402 response bodies. Use NETWORK_CLIENT ("base") so JS clients
+# can build payment headers without hitting "Unsupported network".
 
 SCRAPE_ACCEPTS = [
     {
@@ -83,6 +85,42 @@ ROUTE_ACCEPTS = {
     "POST /scrape":  SCRAPE_ACCEPTS,
     "POST /extract": EXTRACT_ACCEPTS,
 }
+
+# ── Network normalisation middleware ──────────────────────────────────────────
+
+class NetworkNormalisationMiddleware:
+    """
+    Rewrites 'base' → 'eip155:8453' in incoming X-Payment headers before the
+    payment middleware processes them. The network string is not part of the
+    EIP-3009 signed payload so this does not affect signature validity.
+
+    This bridges the JS SDK (which only signs with "base") and the Python x402
+    SDK / xpay.sh facilitator (which require "eip155:8453" for chain lookup).
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "http":
+            headers = list(scope.get("headers", []))
+            new_headers = []
+            for name, value in headers:
+                if name.lower() == b"x-payment":
+                    try:
+                        decoded = json.loads(base64.b64decode(value).decode("utf-8"))
+                        if decoded.get("network") == NETWORK_CLIENT:
+                            decoded["network"] = NETWORK_INTERNAL
+                            value = base64.b64encode(
+                                json.dumps(decoded).encode("utf-8")
+                            )
+                    except Exception:
+                        pass  # leave header unchanged if parsing fails
+                new_headers.append((name, value))
+            scope = {**scope, "headers": new_headers}
+
+        await self.app(scope, receive, send)
+
 
 # ── ASGI middleware: injects accepts array into 402 response body ─────────────
 
@@ -204,10 +242,7 @@ facilitator = HTTPFacilitatorClient(
 )
 
 server = x402ResourceServer(facilitator)
-# Register both network formats so incoming payment headers are accepted
-# regardless of whether the client used "base" or "eip155:8453"
 server.register(NETWORK_INTERNAL, ExactEvmServerScheme())
-server.register(NETWORK_CLIENT, ExactEvmServerScheme())
 
 routes: dict[str, RouteConfig] = {
     "POST /scrape": RouteConfig(
@@ -216,14 +251,13 @@ routes: dict[str, RouteConfig] = {
                 scheme="exact",
                 pay_to=PAY_TO,
                 price=SCRAPE_PRICE,
-                network=NETWORK_INTERNAL,   # Python SDK requires CAIP-2 format
+                network=NETWORK_INTERNAL,
             ),
         ],
         mime_type="application/json",
         description=(
             f"Scrape any public URL and receive clean LLM-ready markdown. "
-            f"Price: {SCRAPE_PRICE} USDC per call on Base mainnet. "
-            "Supports JS rendering for SPAs and dynamic sites."
+            f"Price: {SCRAPE_PRICE} USDC per call on Base mainnet."
         ),
     ),
     "POST /extract": RouteConfig(
@@ -232,20 +266,24 @@ routes: dict[str, RouteConfig] = {
                 scheme="exact",
                 pay_to=PAY_TO,
                 price=EXTRACT_PRICE,
-                network=NETWORK_INTERNAL,   # Python SDK requires CAIP-2 format
+                network=NETWORK_INTERNAL,
             ),
         ],
         mime_type="application/json",
         description=(
             f"Schema-driven structured JSON extraction from any URL. "
-            f"Pass a list of fields and receive clean, typed JSON. "
             f"Price: {EXTRACT_PRICE} USDC per call on Base mainnet."
         ),
     ),
 }
 
+# Middleware stack (applied in reverse order — last added runs first):
+# 1. NetworkNormalisationMiddleware  — rewrites "base" → "eip155:8453" in X-Payment
+# 2. PaymentMiddlewareASGI           — validates payment, returns 402 if missing/invalid
+# 3. X402ResponseBodyMiddleware      — rewrites 402 body to use "base" for JS clients
 app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
 app.add_middleware(X402ResponseBodyMiddleware, route_accepts=ROUTE_ACCEPTS)
+app.add_middleware(NetworkNormalisationMiddleware)
 
 # ── Request / Response models ─────────────────────────────────────────────────
 
@@ -533,7 +571,7 @@ async def bazaar_manifest() -> dict[str, Any]:
                 "url": f"{BASE_URL}/extract",
                 "method": "POST",
                 "name": "TerraDeed Structured Extractor",
-                "description": "Schema-driven structured JSON extraction from any URL. Pass a list of fields and receive clean, typed JSON.",
+                "description": "Schema-driven structured JSON extraction from any URL. Pass fields, receive typed JSON.",
                 "category": "search",
                 "tags": ["extraction", "structured-data", "json", "llm", "ai-agent", "schema"],
                 "input": {"url": "https://example.com/product", "fields": ["price", "title", "availability"], "js_render": False},
