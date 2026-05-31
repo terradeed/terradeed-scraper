@@ -215,12 +215,12 @@ server.register(NETWORK_INTERNAL, ExactEvmServerScheme())
 
 routes: dict[str, RouteConfig] = {
     "POST /scrape": RouteConfig(
-        accepts=[PaymentOption(scheme="exact", pay_to=PAY_TO, price=SCRAPE_PRICE, network=NETWORK_INTERNAL)],
+        accepts=[PaymentOption(scheme="exact", pay_to=PAY_TO, price=SCRAPE_PRICE, network=NETWORK_CLIENT)],
         mime_type="application/json",
         description="Scrape any public URL — clean LLM-ready markdown. $0.01 USDC on Base.",
     ),
     "POST /extract": RouteConfig(
-        accepts=[PaymentOption(scheme="exact", pay_to=PAY_TO, price=EXTRACT_PRICE, network=NETWORK_INTERNAL)],
+        accepts=[PaymentOption(scheme="exact", pay_to=PAY_TO, price=EXTRACT_PRICE, network=NETWORK_CLIENT)],
         mime_type="application/json",
         description="Schema-driven structured JSON extraction. $0.05 USDC on Base.",
     ),
