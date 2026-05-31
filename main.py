@@ -383,6 +383,7 @@ async def root():
             "payment": {"protocol": "x402", "network": NETWORK_CLIENT, "facilitator": FACILITATOR},
             "docs": f"{BASE_URL}/docs",
             "well_known": f"{BASE_URL}/.well-known/x402",
+            "accepts": SCRAPE_ACCEPTS + EXTRACT_ACCEPTS,
         },
     )
 
