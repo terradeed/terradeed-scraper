@@ -367,8 +367,24 @@ async def extract(body: ExtractRequest) -> dict[str, Any]:
 
 
 @app.get("/")
-async def root() -> dict[str, Any]:
-    return {"name": "TerraDeed Scrape API", "version": "0.6.0", "endpoints": {"POST /scrape": {"price": SCRAPE_PRICE}, "POST /extract": {"price": EXTRACT_PRICE}}, "payment": {"protocol": "x402", "network": NETWORK_CLIENT, "facilitator": FACILITATOR}, "docs": "/docs"}
+async def root():
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=402,
+        content={
+            "x402Version": 2,
+            "name": "TerraDeed Scrape API",
+            "description": "Pay-per-use web scraping and structured data extraction via x402 USDC micropayments on Base.",
+            "version": "0.6.0",
+            "endpoints": {
+                "POST /scrape":  {"price": SCRAPE_PRICE, "description": "Clean LLM-ready markdown from any URL"},
+                "POST /extract": {"price": EXTRACT_PRICE, "description": "Schema-driven structured JSON extraction"},
+            },
+            "payment": {"protocol": "x402", "network": NETWORK_CLIENT, "facilitator": FACILITATOR},
+            "docs": f"{BASE_URL}/docs",
+            "well_known": f"{BASE_URL}/.well-known/x402",
+        },
+    )
 
 
 @app.get("/health")
@@ -390,6 +406,8 @@ async def bazaar_manifest() -> dict[str, Any]:
 async def well_known_x402() -> dict[str, Any]:
     return {
         "version": 2,
+        "name": "TerraDeed Scrape API",
+        "description": "Pay-per-use web scraping and structured data extraction via x402 USDC micropayments on Base.",
         "resources": [
             {"url": f"{BASE_URL}/scrape", "method": "POST", "description": "LLM-ready markdown from any URL.", "accepts": SCRAPE_ACCEPTS, "info": {"name": "TerraDeed Web Scraper", "category": "search", "tags": ["scraping", "web-data", "markdown", "llm"]}},
             {"url": f"{BASE_URL}/extract", "method": "POST", "description": "Schema-driven structured JSON extraction.", "accepts": EXTRACT_ACCEPTS, "info": {"name": "TerraDeed Structured Extractor", "category": "search", "tags": ["extraction", "structured-data", "json", "llm"]}},
