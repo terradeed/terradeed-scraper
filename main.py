@@ -138,6 +138,9 @@ class X402ResponseBodyMiddleware:
         accepts = self.route_accepts.get(route_key, [])
         return json.dumps({"x402Version": 2, "accepts": accepts, "error": "Payment required"}).encode()
 
+    def _should_intercept(self, method: str, path: str) -> bool:
+        return f"{method} {path}" in self.route_accepts
+
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
@@ -145,6 +148,11 @@ class X402ResponseBodyMiddleware:
 
         method = scope.get("method", "")
         path = scope.get("path", "")
+
+        if not self._should_intercept(method, path):
+            await self.app(scope, receive, send)
+            return
+
         status_code: Optional[int] = None
         body = self._build_body(method, path)
 
