@@ -249,7 +249,7 @@ Content:
         )
 
     if response.status_code != 200:
-        raise HTTPException(status_code=502, detail="Extraction model error")
+        raise HTTPException(status_code=502, detail=f"Anthropic error: {response.status_code} - {response.text}")
 
     try:
         data = json.loads(response.json()["content"][0]["text"].strip())
