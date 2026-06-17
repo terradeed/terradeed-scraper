@@ -1,27 +1,40 @@
 """
-TerraDeed Labs — x402 Web Scraping API
+TerraDeed Labs — x402 Web Scraping API + API Key Tier
 
 Wallet:    0x4E024e356bd01853654b7B5196F2B85F67Cc39EC  (Base mainnet)
 Endpoints:
-    POST /scrape   — $0.01 USDC — clean LLM-ready markdown from any URL
-    POST /extract  — $0.05 USDC — schema-driven structured JSON extraction
+    POST /scrape   — $0.01 USDC or 1 credit — clean LLM-ready markdown from any URL
+    POST /extract  — $0.05 USDC or 5 credits — schema-driven structured JSON extraction
 Network:   Base mainnet (eip155:8453 internally / base for JS clients)
 Facilitator: xpay (https://facilitator.xpay.sh)
+
+Authentication Methods (parallel):
+    1. x402: Payment-Signature header with USDC micropayment
+    2. API Key: Authorization: Bearer <key> with prepaid credits
 
 Set these env vars in Railway:
     ANTHROPIC_API_KEY=your-anthropic-key  (required for /extract)
     CDP_API_KEY_ID=your-key-id            (optional)
     CDP_API_KEY_SECRET=your-secret        (optional)
+    ADMIN_SECRET=your-admin-secret        (required for /admin/keys endpoint)
+    DATABASE_URL=sqlite:///./terradeed.db (optional, defaults to SQLite on volume)
 """
 
 import base64
 import json
 import os
+import sqlite3
+import secrets
+import hashlib
+from datetime import datetime, timezone
 from typing import Any, Optional
+from contextlib import contextmanager
+from functools import wraps
 
 import httpx
 import trafilatura
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 from x402.http import (
@@ -40,6 +53,8 @@ from x402.server import x402ResourceServer
 PAY_TO           = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
 SCRAPE_PRICE     = "$0.01"
 EXTRACT_PRICE    = "$0.05"
+SCRAPE_CREDITS   = 1
+EXTRACT_CREDITS  = 5
 
 NETWORK_INTERNAL = "eip155:8453"
 NETWORK_CLIENT   = "base"
@@ -52,18 +67,196 @@ EXTRACT_MODEL    = "claude-sonnet-4-20250514"
 CDP_API_KEY_ID     = os.environ.get("CDP_API_KEY_ID", "")
 CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
 ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
+ADMIN_SECRET       = os.environ.get("ADMIN_SECRET", "terradeed-admin-2026")
+DATABASE_URL       = os.environ.get("DATABASE_URL", "sqlite:///./terradeed.db")
+
+# Parse SQLite path from DATABASE_URL
+DB_PATH = DATABASE_URL.replace("sqlite:///", "") if DATABASE_URL.startswith("sqlite://") else "./terradeed.db"
+
+# ── Database Setup ────────────────────────────────────────────────────────────
+
+@contextmanager
+def get_db():
+    """Context manager for database connections."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def init_db():
+    """Initialize the database with required tables."""
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key_hash TEXT UNIQUE NOT NULL,
+                key_prefix TEXT NOT NULL,
+                credits_remaining INTEGER NOT NULL DEFAULT 0,
+                rate_limit_per_minute INTEGER DEFAULT 60,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT,
+                total_calls INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT 1,
+                metadata TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS usage_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key_prefix TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                credits_used INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                success BOOLEAN DEFAULT 1,
+                error_message TEXT
+            )
+        """)
+        conn.commit()
+        print(f"✓ Database initialized at {DB_PATH}")
+
+# Initialize DB on module load
+init_db()
+
+# ── API Key Management ────────────────────────────────────────────────────────
+
+def generate_api_key() -> tuple[str, str]:
+    """Generate a new API key. Returns (full_key, key_hash)."""
+    random_part = secrets.token_urlsafe(32)
+    full_key = f"td_sk_{random_part}"
+    key_hash = hashlib.sha256(full_key.encode()).hexdigest()
+    return full_key, key_hash
+
+def hash_key(key: str) -> str:
+    """Hash an API key for lookup."""
+    return hashlib.sha256(key.encode()).hexdigest()
+
+def get_key_prefix(key: str) -> str:
+    """Get the first 12 chars of key for display/logging."""
+    return key[:12] + "..." if len(key) > 12 else key
+
+def create_api_key(credits: int = 100, rate_limit: int = 60) -> dict[str, Any]:
+    """Create a new API key with initial credits."""
+    full_key, key_hash = generate_api_key()
+    key_prefix = get_key_prefix(full_key)
+    created_at = datetime.now(timezone.utc).isoformat()
+    
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO api_keys 
+               (key_hash, key_prefix, credits_remaining, rate_limit_per_minute, created_at, metadata)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (key_hash, key_prefix, credits, rate_limit, created_at, json.dumps({"source": "admin_api"}))
+        )
+        conn.commit()
+    
+    return {
+        "api_key": full_key,
+        "credits": credits,
+        "rate_limit": rate_limit,
+        "created_at": created_at,
+        "message": "Store this key securely. It will not be shown again."
+    }
+
+def validate_api_key(key: str) -> Optional[dict[str, Any]]:
+    """Validate an API key and return its details if valid."""
+    key_hash = hash_key(key)
+    
+    with get_db() as conn:
+        cursor = conn.execute(
+            """SELECT key_prefix, credits_remaining, rate_limit_per_minute, is_active 
+               FROM api_keys WHERE key_hash = ?""",
+            (key_hash,)
+        )
+        row = cursor.fetchone()
+        
+        if not row:
+            return None
+        
+        if not row["is_active"]:
+            return {"error": "API key has been revoked"}
+        
+        if row["credits_remaining"] <= 0:
+            return {"error": "Insufficient credits", "credits_remaining": 0}
+        
+        return {
+            "key_prefix": row["key_prefix"],
+            "credits_remaining": row["credits_remaining"],
+            "rate_limit": row["rate_limit_per_minute"],
+            "valid": True
+        }
+
+def deduct_credits(key: str, credits: int, endpoint: str, success: bool = True, error_message: str = None) -> bool:
+    """Deduct credits from an API key and log usage."""
+    key_hash = hash_key(key)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    key_prefix = get_key_prefix(key)
+    
+    with get_db() as conn:
+        # Deduct credits
+        cursor = conn.execute(
+            """UPDATE api_keys 
+               SET credits_remaining = credits_remaining - ?,
+                   total_calls = total_calls + 1,
+                   last_used_at = ?
+               WHERE key_hash = ? AND credits_remaining >= ?""",
+            (credits, timestamp, key_hash, credits)
+        )
+        
+        if cursor.rowcount == 0:
+            return False
+        
+        # Log usage
+        conn.execute(
+            """INSERT INTO usage_logs (key_prefix, endpoint, credits_used, timestamp, success, error_message)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (key_prefix, endpoint, credits, timestamp, success, error_message)
+        )
+        conn.commit()
+    
+    return True
+
+def get_key_stats(key_prefix: str = None) -> list[dict[str, Any]]:
+    """Get usage stats for API keys."""
+    with get_db() as conn:
+        if key_prefix:
+            cursor = conn.execute(
+                """SELECT key_prefix, credits_remaining, total_calls, created_at, last_used_at, is_active
+                   FROM api_keys WHERE key_prefix LIKE ?""",
+                (f"%{key_prefix}%",)
+            )
+        else:
+            cursor = conn.execute(
+                """SELECT key_prefix, credits_remaining, total_calls, created_at, last_used_at, is_active
+                   FROM api_keys ORDER BY created_at DESC LIMIT 100"""
+            )
+        return [dict(row) for row in cursor.fetchall()]
+
+# ── Hardcoded test key for immediate testing ───────────────────────────────────
+
+def ensure_test_key():
+    """Ensure a test key exists for immediate testing."""
+    test_key = "td_sk_test_terradeed_2026"
+    key_hash = hash_key(test_key)
+    
+    with get_db() as conn:
+        cursor = conn.execute("SELECT 1 FROM api_keys WHERE key_hash = ?", (key_hash,))
+        if not cursor.fetchone():
+            conn.execute(
+                """INSERT INTO api_keys 
+                   (key_hash, key_prefix, credits_remaining, rate_limit_per_minute, created_at, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (key_hash, get_key_prefix(test_key), 1000, 60, 
+                 datetime.now(timezone.utc).isoformat(), 
+                 json.dumps({"source": "hardcoded_test_key"}))
+            )
+            conn.commit()
+            print(f"✓ Test key created: {test_key[:20]}...")
+
+ensure_test_key()
 
 # ── x402 accepts arrays ───────────────────────────────────────────────────────
-# extra.name and extra.version are critical for EIP-712 domain alignment.
-#
-# The x402 JS SDK signAuthorization() uses extra?.name and extra?.version
-# when building the EIP-712 domain for signing. Without these, name/version
-# are undefined and excluded from the domain hash. The server's verify()
-# falls back to config["8453"].usdcName ("USD Coin") and getVersion() ("2"),
-# producing a different domain and an invalid signature recovery.
-#
-# Providing extra.name and extra.version explicitly forces both signing and
-# verification to use the same EIP-712 domain — making the signature valid.
 
 USDC_EXTRA = {"name": "USD Coin", "version": "2"}
 
@@ -204,8 +397,8 @@ def _build_cdp_auth_provider() -> CreateHeadersAuthProvider | None:
 
 app = FastAPI(
     title="TerraDeed Scrape API",
-    description="Pay-per-use web scraping and structured data extraction via x402 USDC micropayments.",
-    version="0.6.0",
+    description="Pay-per-use web scraping and structured data extraction via x402 USDC micropayments or API keys with prepaid credits.",
+    version="0.7.0",
 )
 
 auth_provider = _build_cdp_auth_provider()
@@ -217,18 +410,23 @@ routes: dict[str, RouteConfig] = {
     "POST /scrape": RouteConfig(
         accepts=[PaymentOption(scheme="exact", pay_to=PAY_TO, price=SCRAPE_PRICE, network=NETWORK_INTERNAL)],
         mime_type="application/json",
-        description="Scrape any public URL — clean LLM-ready markdown. $0.01 USDC on Base.",
+        description="Scrape any public URL — clean LLM-ready markdown. $0.01 USDC or 1 credit.",
     ),
     "POST /extract": RouteConfig(
         accepts=[PaymentOption(scheme="exact", pay_to=PAY_TO, price=EXTRACT_PRICE, network=NETWORK_INTERNAL)],
         mime_type="application/json",
-        description="Schema-driven structured JSON extraction. $0.05 USDC on Base.",
+        description="Schema-driven structured JSON extraction. $0.05 USDC or 5 credits.",
     ),
 }
 
+# NOTE: Order matters! API key check must happen BEFORE x402 middleware
+# so that API key requests don't trigger x402 payment flow
 app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
 app.add_middleware(X402ResponseBodyMiddleware, route_accepts=ROUTE_ACCEPTS)
 app.add_middleware(NetworkNormalisationMiddleware)
+
+# Security scheme for API key docs
+security = HTTPBearer(auto_error=False)
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
@@ -243,6 +441,7 @@ class ScrapeResponse(BaseModel):
     word_count: int
     title: Optional[str] = None
     js_rendered: bool = False
+    auth_method: str = "x402"  # "x402" or "api_key"
 
 class ExtractRequest(BaseModel):
     url: str
@@ -257,6 +456,100 @@ class ExtractResponse(BaseModel):
     fields_extracted: list[str]
     js_rendered: bool = False
     model: str = EXTRACT_MODEL
+    auth_method: str = "x402"
+
+class CreateKeyRequest(BaseModel):
+    credits: int = 100
+    rate_limit: int = 60
+    admin_secret: str
+
+class CreateKeyResponse(BaseModel):
+    api_key: str
+    credits: int
+    rate_limit: int
+    created_at: str
+    message: str
+
+class KeyInfoResponse(BaseModel):
+    key_prefix: str
+    credits_remaining: int
+    rate_limit: int
+    total_calls: int
+    created_at: str
+    last_used_at: Optional[str]
+    is_active: bool
+
+# ── Auth Helpers ──────────────────────────────────────────────────────────────
+
+async def get_auth_method(request: Request) -> tuple[str, Optional[str]]:
+    """
+    Determine authentication method from request headers.
+    Returns: (method, api_key_or_none)
+    """
+    # Check for API key first
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        api_key = auth_header[7:].strip()
+        return ("api_key", api_key)
+    
+    # Check for x402 payment signature
+    if request.headers.get("payment-signature"):
+        return ("x402", None)
+    
+    return ("none", None)
+
+def require_api_key(endpoint_credits: int, endpoint_name: str):
+    """
+    Decorator factory for endpoints that accept API key auth.
+    Validates the key, checks credits, deducts on success.
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Extract request from args/kwargs
+            request = kwargs.get('request') or (args[0] if args else None)
+            if not request:
+                raise HTTPException(status_code=500, detail="Request object not found")
+            
+            auth_method, api_key = await get_auth_method(request)
+            
+            if auth_method == "api_key" and api_key:
+                # Validate the key
+                key_info = validate_api_key(api_key)
+                
+                if not key_info:
+                    raise HTTPException(status_code=401, detail="Invalid API key")
+                
+                if "error" in key_info:
+                    raise HTTPException(status_code=403, detail=key_info["error"])
+                
+                # Check if enough credits
+                if key_info["credits_remaining"] < endpoint_credits:
+                    raise HTTPException(
+                        status_code=402, 
+                        detail={
+                            "error": "Insufficient credits",
+                            "credits_remaining": key_info["credits_remaining"],
+                            "credits_required": endpoint_credits,
+                            "top_up_url": "https://terradeed.co.uk/api-keys"
+                        }
+                    )
+                
+                # Store key info in request state for later deduction
+                request.state.api_key = api_key
+                request.state.credits_to_deduct = endpoint_credits
+                request.state.endpoint_name = endpoint_name
+                request.state.auth_method = "api_key"
+                
+            elif auth_method == "x402":
+                request.state.auth_method = "x402"
+            else:
+                # No valid auth - let x402 middleware handle it (will return 402)
+                request.state.auth_method = "none"
+            
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 # ── Static scraping ───────────────────────────────────────────────────────────
 
@@ -360,18 +653,82 @@ Content:
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.post("/scrape", response_model=ScrapeResponse)
-async def scrape(body: ScrapeRequest) -> dict[str, Any]:
-    return await _scrape(body.url, body.js_render)
+async def scrape(body: ScrapeRequest, request: Request) -> dict[str, Any]:
+    auth_method, api_key = await get_auth_method(request)
+    
+    # Handle API key auth
+    if auth_method == "api_key":
+        key_info = validate_api_key(api_key)
+        if not key_info or "error" in key_info:
+            raise HTTPException(status_code=401, detail=key_info.get("error", "Invalid API key"))
+        
+        if key_info["credits_remaining"] < SCRAPE_CREDITS:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "Insufficient credits",
+                    "credits_remaining": key_info["credits_remaining"],
+                    "credits_required": SCRAPE_CREDITS,
+                    "top_up_url": "https://terradeed.co.uk/api-keys"
+                }
+            )
+        
+        # Perform scrape
+        result = await _scrape(body.url, body.js_render)
+        
+        # Deduct credits on success
+        deduct_credits(api_key, SCRAPE_CREDITS, "/scrape", success=True)
+        result["auth_method"] = "api_key"
+        result["credits_remaining"] = key_info["credits_remaining"] - SCRAPE_CREDITS
+        return result
+    
+    # x402 auth - the middleware handles verification, we just do the work
+    result = await _scrape(body.url, body.js_render)
+    result["auth_method"] = "x402"
+    return result
 
 
 @app.post("/extract", response_model=ExtractResponse)
-async def extract(body: ExtractRequest) -> dict[str, Any]:
+async def extract(body: ExtractRequest, request: Request) -> dict[str, Any]:
     if not body.fields:
         raise HTTPException(status_code=422, detail="At least one field must be specified.")
     if len(body.fields) > 20:
         raise HTTPException(status_code=422, detail="Maximum 20 fields per request.")
+    
+    auth_method, api_key = await get_auth_method(request)
+    
+    # Handle API key auth
+    if auth_method == "api_key":
+        key_info = validate_api_key(api_key)
+        if not key_info or "error" in key_info:
+            raise HTTPException(status_code=401, detail=key_info.get("error", "Invalid API key"))
+        
+        if key_info["credits_remaining"] < EXTRACT_CREDITS:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "Insufficient credits",
+                    "credits_remaining": key_info["credits_remaining"],
+                    "credits_required": EXTRACT_CREDITS,
+                    "top_up_url": "https://terradeed.co.uk/api-keys"
+                }
+            )
+        
+        # Perform extract
+        scrape_result = await _scrape(body.url, body.js_render)
+        result = await _extract_structured(scrape_result["content"], body.url, body.fields, scrape_result["js_rendered"])
+        
+        # Deduct credits on success
+        deduct_credits(api_key, EXTRACT_CREDITS, "/extract", success=True)
+        result["auth_method"] = "api_key"
+        result["credits_remaining"] = key_info["credits_remaining"] - EXTRACT_CREDITS
+        return result
+    
+    # x402 auth
     scrape_result = await _scrape(body.url, body.js_render)
-    return await _extract_structured(scrape_result["content"], body.url, body.fields, scrape_result["js_rendered"])
+    result = await _extract_structured(scrape_result["content"], body.url, body.fields, scrape_result["js_rendered"])
+    result["auth_method"] = "x402"
+    return result
 
 
 @app.get("/")
@@ -382,11 +739,15 @@ async def root():
         content={
             "x402Version": 2,
             "name": "TerraDeed Scrape API",
-            "description": "Pay-per-use web scraping and structured data extraction via x402 USDC micropayments on Base.",
-            "version": "0.6.0",
+            "description": "Pay-per-use web scraping and structured data extraction via x402 USDC micropayments or API keys with prepaid credits.",
+            "version": "0.7.0",
+            "authentication": {
+                "x402": {"header": "Payment-Signature", "currency": "USDC", "network": NETWORK_CLIENT},
+                "api_key": {"header": "Authorization: Bearer <key>", "credit_pricing": {"scrape": 1, "extract": 5}}
+            },
             "endpoints": {
-                "POST /scrape":  {"price": SCRAPE_PRICE, "description": "Clean LLM-ready markdown from any URL"},
-                "POST /extract": {"price": EXTRACT_PRICE, "description": "Schema-driven structured JSON extraction"},
+                "POST /scrape":  {"price_usdc": SCRAPE_PRICE, "credits": SCRAPE_CREDITS, "description": "Clean LLM-ready markdown from any URL"},
+                "POST /extract": {"price_usdc": EXTRACT_PRICE, "credits": EXTRACT_CREDITS, "description": "Schema-driven structured JSON extraction"},
             },
             "payment": {"protocol": "x402", "network": NETWORK_CLIENT, "facilitator": FACILITATOR},
             "docs": f"{BASE_URL}/docs",
@@ -398,8 +759,26 @@ async def root():
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.6.0", "cdp_auth": "configured" if CDP_API_KEY_ID else "missing", "anthropic": "configured" if ANTHROPIC_API_KEY else "missing", "network": NETWORK_CLIENT, "capabilities": "static+js-rendering+structured-extraction"}
+async def health() -> dict[str, Any]:
+    # Get some basic stats
+    with get_db() as conn:
+        cursor = conn.execute("SELECT COUNT(*) as count FROM api_keys WHERE is_active = 1")
+        active_keys = cursor.fetchone()["count"]
+        cursor = conn.execute("SELECT COUNT(*) as count FROM api_keys")
+        total_keys = cursor.fetchone()["count"]
+        cursor = conn.execute("SELECT SUM(total_calls) as total FROM api_keys")
+        total_calls = cursor.fetchone()["total"] or 0
+    
+    return {
+        "status": "ok", 
+        "version": "0.7.0",
+        "cdp_auth": "configured" if CDP_API_KEY_ID else "missing", 
+        "anthropic": "configured" if ANTHROPIC_API_KEY else "missing", 
+        "network": NETWORK_CLIENT, 
+        "capabilities": "static+js-rendering+structured-extraction",
+        "auth_methods": ["x402", "api_key"],
+        "api_keys": {"active": active_keys, "total": total_keys, "total_calls": total_calls}
+    }
 
 
 @app.get("/bazaar.json")
@@ -423,6 +802,95 @@ async def well_known_x402() -> dict[str, Any]:
             {"url": f"{BASE_URL}/extract", "method": "POST", "description": "Schema-driven structured JSON extraction.", "accepts": EXTRACT_ACCEPTS, "info": {"name": "TerraDeed Structured Extractor", "category": "search", "tags": ["extraction", "structured-data", "json", "llm"]}},
         ],
     }
+
+
+# ── Admin Endpoints ───────────────────────────────────────────────────────────
+
+@app.post("/admin/keys", response_model=CreateKeyResponse)
+async def create_key(request: CreateKeyRequest):
+    """Create a new API key (admin only)."""
+    if request.admin_secret != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid admin secret")
+    
+    result = create_api_key(credits=request.credits, rate_limit=request.rate_limit)
+    return CreateKeyResponse(**result)
+
+
+@app.get("/admin/keys")
+async def list_keys(admin_secret: str):
+    """List all API keys (admin only)."""
+    if admin_secret != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid admin secret")
+    
+    stats = get_key_stats()
+    return {"keys": stats, "count": len(stats)}
+
+
+@app.get("/admin/keys/{key_prefix}")
+async def get_key_info(key_prefix: str, admin_secret: str):
+    """Get info about a specific API key (admin only)."""
+    if admin_secret != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid admin secret")
+    
+    stats = get_key_stats(key_prefix)
+    if not stats:
+        raise HTTPException(status_code=404, detail="Key not found")
+    return stats[0]
+
+
+@app.post("/admin/keys/{key_prefix}/revoke")
+async def revoke_key(key_prefix: str, admin_secret: str):
+    """Revoke an API key (admin only)."""
+    if admin_secret != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid admin secret")
+    
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE api_keys SET is_active = 0 WHERE key_prefix LIKE ?",
+            (f"%{key_prefix}%",)
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Key not found")
+    
+    return {"message": "Key revoked successfully", "key_prefix": key_prefix}
+
+
+@app.post("/admin/keys/{key_prefix}/add-credits")
+async def add_credits(key_prefix: str, credits: int, admin_secret: str):
+    """Add credits to an API key (admin only)."""
+    if admin_secret != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid admin secret")
+    
+    with get_db() as conn:
+        cursor = conn.execute(
+            "UPDATE api_keys SET credits_remaining = credits_remaining + ? WHERE key_prefix LIKE ?",
+            (credits, f"%{key_prefix}%")
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Key not found")
+        
+        cursor = conn.execute(
+            "SELECT credits_remaining FROM api_keys WHERE key_prefix LIKE ?",
+            (f"%{key_prefix}%",)
+        )
+        new_balance = cursor.fetchone()["credits_remaining"]
+    
+    return {"message": "Credits added", "key_prefix": key_prefix, "credits_added": credits, "new_balance": new_balance}
+
+
+# ── Test Endpoint ─────────────────────────────────────────────────────────────
+
+@app.get("/test-key")
+async def test_key(api_key: str):
+    """Test an API key and see its info."""
+    info = validate_api_key(api_key)
+    if not info:
+        return {"valid": False, "error": "Invalid key"}
+    if "error" in info:
+        return {"valid": False, "error": info["error"]}
+    return {"valid": True, **info}
 
 
 if __name__ == "__main__":
