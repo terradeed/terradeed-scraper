@@ -274,8 +274,10 @@ async def scrape(body: ScrapeRequest, request: Request):
     
     if auth_method == "api_key":
         key_info = validate_api_key(api_key)
-        if not key_info or "error" in key_info:
-            raise HTTPException(status_code=401, detail=key_info.get("error", "Invalid API key"))
+        if not key_info:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        if "error" in key_info:
+            raise HTTPException(status_code=401, detail=key_info["error"])
         
         if key_info["credits_remaining"] < SCRAPE_CREDITS:
             raise HTTPException(status_code=402, detail={"error": "Insufficient credits", "credits_remaining": key_info["credits_remaining"], "credits_required": SCRAPE_CREDITS})
@@ -300,8 +302,10 @@ async def extract(body: ExtractRequest, request: Request):
     
     if auth_method == "api_key":
         key_info = validate_api_key(api_key)
-        if not key_info or "error" in key_info:
-            raise HTTPException(status_code=401, detail=key_info.get("error", "Invalid API key"))
+        if not key_info:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        if "error" in key_info:
+            raise HTTPException(status_code=401, detail=key_info["error"])
         
         if key_info["credits_remaining"] < EXTRACT_CREDITS:
             raise HTTPException(status_code=402, detail={"error": "Insufficient credits", "credits_remaining": key_info["credits_remaining"], "credits_required": EXTRACT_CREDITS})
