@@ -419,11 +419,52 @@ routes: dict[str, RouteConfig] = {
     ),
 }
 
+# ── API Key Middleware (must be BEFORE x402 middleware) ────────────────────────
+
+class APIKeyMiddleware:
+    """ASGI middleware that checks for API keys and bypasses x402 if valid."""
+    def __init__(self, app: Any) -> None:
+        self.app = app
+    
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        
+        # Check if this is a protected route
+        method = scope.get("method", "")
+        path = scope.get("path", "")
+        route_key = f"{method} {path}"
+        
+        if route_key not in routes:
+            await self.app(scope, receive, send)
+            return
+        
+        # Check for API key in headers
+        headers = dict(scope.get("headers", []))
+        auth_header = headers.get(b"authorization", b"").decode("utf-8", errors="ignore")
+        
+        if auth_header.lower().startswith("bearer "):
+            api_key = auth_header[7:].strip()
+            key_info = validate_api_key(api_key)
+            
+            if key_info and key_info.get("valid"):
+                # Valid API key - store in scope and bypass x402
+                scope["api_key"] = api_key
+                scope["api_key_valid"] = True
+                scope["api_key_info"] = key_info
+                await self.app(scope, receive, send)
+                return
+        
+        # No valid API key - proceed to x402 middleware
+        await self.app(scope, receive, send)
+
 # NOTE: Order matters! API key check must happen BEFORE x402 middleware
 # so that API key requests don't trigger x402 payment flow
 app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
 app.add_middleware(X402ResponseBodyMiddleware, route_accepts=ROUTE_ACCEPTS)
 app.add_middleware(NetworkNormalisationMiddleware)
+app.add_middleware(APIKeyMiddleware)
 
 # Security scheme for API key docs
 security = HTTPBearer(auto_error=False)
