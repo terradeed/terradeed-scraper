@@ -422,7 +422,7 @@ routes: dict[str, RouteConfig] = {
 # ── API Key Middleware (must be BEFORE x402 middleware) ────────────────────────
 
 class APIKeyMiddleware:
-    """ASGI middleware that checks for API keys and bypasses x402 if valid."""
+    """ASGI middleware that checks for API keys and returns response directly, bypassing x402."""
     def __init__(self, app: Any) -> None:
         self.app = app
     
@@ -449,10 +449,15 @@ class APIKeyMiddleware:
             key_info = validate_api_key(api_key)
             
             if key_info and key_info.get("valid"):
-                # Valid API key - store in scope and bypass x402
+                # Valid API key - mark as paid and let request through
+                # Add a header to indicate API key auth was used
                 scope["api_key"] = api_key
                 scope["api_key_valid"] = True
-                scope["api_key_info"] = key_info
+                # Store in headers for endpoint to access
+                headers_list = list(scope.get("headers", []))
+                headers_list.append((b"x-api-key-valid", b"true"))
+                headers_list.append((b"x-api-key", api_key.encode()))
+                scope["headers"] = headers_list
                 await self.app(scope, receive, send)
                 return
         
