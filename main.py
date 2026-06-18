@@ -209,7 +209,15 @@ def declare_discovery_extension():
                     {"name": "word_count", "type": "integer", "description": "Approximate word count"},
                     {"name": "title", "type": "string|null", "description": "Page title if available"},
                     {"name": "js_rendered", "type": "boolean", "description": "Whether JavaScript was executed"}
-                ]
+                ],
+                "example": {
+                    "content": "## Example Domain\n\nThis domain is for use in illustrative examples in documents. You may use this domain in literature without prior coordination or asking for permission.",
+                    "url": "https://example.com",
+                    "status": "success",
+                    "word_count": 28,
+                    "title": "Example Domain",
+                    "js_rendered": False
+                }
             }
         },
         "schema": {
