@@ -133,7 +133,7 @@ SCRAPE_ACCEPTS = [{
     "scheme": "exact",
     "network": NETWORK_CLIENT,
     "asset": USDC_BASE,
-    "maxAmountRequired": "10000",
+    "amount": "10000",
     "payTo": PAY_TO,
     "resource": f"{BASE_URL}/scrape",
     "description": "Scrape any public URL - clean LLM-ready markdown",
@@ -146,7 +146,7 @@ EXTRACT_ACCEPTS = [{
     "scheme": "exact",
     "network": NETWORK_CLIENT,
     "asset": USDC_BASE,
-    "maxAmountRequired": "50000",
+    "amount": "50000",
     "payTo": PAY_TO,
     "resource": f"{BASE_URL}/extract",
     "description": "Schema-driven structured JSON extraction",
@@ -156,9 +156,20 @@ EXTRACT_ACCEPTS = [{
 }]
 
 # x402 Payment Required Response Helper
-def payment_required_response(accepts: list) -> JSONResponse:
-    """Return x402 v2 compliant 402 response with PAYMENT-REQUIRED header"""
-    payload = {"x402Version": 2, "accepts": accepts}
+def payment_required_response(accepts: list, resource_url: str, resource_description: str, resource_mime_type: str) -> JSONResponse:
+    """Return x402 v2 compliant 402 response with PAYMENT-REQUIRED header and resource object"""
+    payload = {
+        "x402Version": 2,
+        "resource": {
+            "url": resource_url,
+            "description": resource_description,
+            "mimeType": resource_mime_type
+        },
+        "accepts": accepts,
+        "extensions": {
+            "bazaar": declare_discovery_extension()
+        }
+    }
     payload_b64 = base64.b64encode(json.dumps(payload).encode()).decode()
     return JSONResponse(
         status_code=402,
@@ -166,11 +177,20 @@ def payment_required_response(accepts: list) -> JSONResponse:
         content={"error": "Payment required"}
     )
 
+def declare_discovery_extension():
+    """Return bazaar discovery extension declaration for Agentic Market indexing"""
+    return {
+        "type": "discovery",
+        "version": "1.0",
+        "resourceServer": "TerraDeed Scrape API",
+        "capabilities": ["indexing", "search"]
+    }
+
 # FastAPI App
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.1",
+    version="0.7.2",
 )
 
 # Middleware: x402 auth check BEFORE Pydantic validation
@@ -185,8 +205,20 @@ async def x402_auth_middleware(request: Request, call_next):
         
         # If no auth provided, return 402 before validation runs
         if auth_method == "none":
-            accepts = SCRAPE_ACCEPTS if request.url.path == "/scrape" else EXTRACT_ACCEPTS
-            return payment_required_response(accepts)
+            if request.url.path == "/scrape":
+                return payment_required_response(
+                    SCRAPE_ACCEPTS,
+                    f"{BASE_URL}/scrape",
+                    "Scrape any public URL - clean LLM-ready markdown",
+                    "application/json"
+                )
+            else:
+                return payment_required_response(
+                    EXTRACT_ACCEPTS,
+                    f"{BASE_URL}/extract",
+                    "Schema-driven structured JSON extraction",
+                    "application/json"
+                )
     
     return await call_next(request)
 
@@ -317,7 +349,12 @@ async def scrape(body: ScrapeRequest, request: Request):
         result["credits_remaining"] = key_info["credits_remaining"] - SCRAPE_CREDITS
         return result
     
-    return payment_required_response(SCRAPE_ACCEPTS)
+    return payment_required_response(
+        SCRAPE_ACCEPTS,
+        f"{BASE_URL}/scrape",
+        "Scrape any public URL - clean LLM-ready markdown",
+        "application/json"
+    )
 
 @app.post("/extract")
 async def extract(body: ExtractRequest, request: Request):
@@ -345,7 +382,12 @@ async def extract(body: ExtractRequest, request: Request):
         result["credits_remaining"] = key_info["credits_remaining"] - EXTRACT_CREDITS
         return result
     
-    return payment_required_response(EXTRACT_ACCEPTS)
+    return payment_required_response(
+        EXTRACT_ACCEPTS,
+        f"{BASE_URL}/extract",
+        "Schema-driven structured JSON extraction",
+        "application/json"
+    )
 
 @app.get("/")
 async def root():
@@ -353,7 +395,7 @@ async def root():
         status_code=402,
         content={
             "name": "TerraDeed Scrape API",
-            "version": "0.7.1",
+            "version": "0.7.2",
             "authentication": {
                 "x402": {"header": "Payment-Signature", "currency": "USDC"},
                 "api_key": {"header": "Authorization: Bearer <key>", "credits": {"scrape": 1, "extract": 5}},
