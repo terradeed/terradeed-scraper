@@ -183,7 +183,30 @@ def declare_discovery_extension():
         "type": "discovery",
         "version": "1.0",
         "resourceServer": "TerraDeed Scrape API",
-        "capabilities": ["indexing", "search"]
+        "capabilities": ["indexing", "search"],
+        "info": {
+            "title": "TerraDeed Scrape API",
+            "description": "Pay-per-use web scraping and structured data extraction via x402 USDC or API keys",
+            "version": "0.7.2",
+            "contact": {
+                "name": "TerraDeed Labs",
+                "url": "https://terradeed.co.uk",
+                "email": "contact@terradeed.co.uk"
+            }
+        },
+        "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "Extracted markdown content"},
+                "url": {"type": "string", "format": "uri"},
+                "status": {"type": "string", "enum": ["success"]},
+                "word_count": {"type": "integer"},
+                "title": {"type": ["string", "null"]},
+                "js_rendered": {"type": "boolean"}
+            },
+            "required": ["content", "url", "status"]
+        }
     }
 
 # FastAPI App
@@ -418,7 +441,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.1",
+        "version": "0.7.2",
         "anthropic": "configured" if ANTHROPIC_API_KEY else "missing",
         "auth_methods": ["x402", "api_key"],
         "api_keys": {"active": active_keys, "total_calls": total_calls}
