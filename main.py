@@ -16,6 +16,7 @@ from contextlib import contextmanager
 import httpx
 import trafilatura
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # Config
@@ -154,12 +155,40 @@ EXTRACT_ACCEPTS = [{
     "extra": USDC_EXTRA,
 }]
 
+# x402 Payment Required Response Helper
+def payment_required_response(accepts: list) -> JSONResponse:
+    """Return x402 v2 compliant 402 response with PAYMENT-REQUIRED header"""
+    payload = {"x402Version": 2, "accepts": accepts}
+    payload_b64 = base64.b64encode(json.dumps(payload).encode()).decode()
+    return JSONResponse(
+        status_code=402,
+        headers={"PAYMENT-REQUIRED": payload_b64},
+        content={"error": "Payment required"}
+    )
+
 # FastAPI App
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.0",
+    version="0.7.1",
 )
+
+# Middleware: x402 auth check BEFORE Pydantic validation
+@app.middleware("http")
+async def x402_auth_middleware(request: Request, call_next):
+    """
+    Intercept POST /scrape and POST /extract to check auth before Pydantic validation.
+    Returns 402 immediately if no valid auth present, avoiding 422 validation errors.
+    """
+    if request.method == "POST" and request.url.path in ["/scrape", "/extract"]:
+        auth_method, api_key = await get_auth_method(request)
+        
+        # If no auth provided, return 402 before validation runs
+        if auth_method == "none":
+            accepts = SCRAPE_ACCEPTS if request.url.path == "/scrape" else EXTRACT_ACCEPTS
+            return payment_required_response(accepts)
+    
+    return await call_next(request)
 
 # Models
 class ScrapeRequest(BaseModel):
@@ -288,8 +317,7 @@ async def scrape(body: ScrapeRequest, request: Request):
         result["credits_remaining"] = key_info["credits_remaining"] - SCRAPE_CREDITS
         return result
     
-    from fastapi.responses import JSONResponse
-    return JSONResponse(status_code=402, content={"x402Version": 2, "accepts": SCRAPE_ACCEPTS, "error": "Payment required"})
+    return payment_required_response(SCRAPE_ACCEPTS)
 
 @app.post("/extract")
 async def extract(body: ExtractRequest, request: Request):
@@ -317,20 +345,18 @@ async def extract(body: ExtractRequest, request: Request):
         result["credits_remaining"] = key_info["credits_remaining"] - EXTRACT_CREDITS
         return result
     
-    from fastapi.responses import JSONResponse
-    return JSONResponse(status_code=402, content={"x402Version": 2, "accepts": EXTRACT_ACCEPTS, "error": "Payment required"})
+    return payment_required_response(EXTRACT_ACCEPTS)
 
 @app.get("/")
 async def root():
-    from fastapi.responses import JSONResponse
     return JSONResponse(
         status_code=402,
         content={
             "name": "TerraDeed Scrape API",
-            "version": "0.7.0",
+            "version": "0.7.1",
             "authentication": {
                 "x402": {"header": "Payment-Signature", "currency": "USDC"},
-                "api_key": {"header": "Authorization: Bearer KEY_HERE", "credits": {"scrape": 1, "extract": 5}},
+                "api_key": {"header": "Authorization: Bearer <key>", "credits": {"scrape": 1, "extract": 5}},
             },
             "endpoints": {
                 "POST /scrape": {"price_usdc": SCRAPE_PRICE, "credits": SCRAPE_CREDITS},
@@ -350,7 +376,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.0",
+        "version": "0.7.1",
         "anthropic": "configured" if ANTHROPIC_API_KEY else "missing",
         "auth_methods": ["x402", "api_key"],
         "api_keys": {"active": active_keys, "total_calls": total_calls}
