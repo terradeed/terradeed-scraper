@@ -192,6 +192,24 @@ def declare_discovery_extension():
                 "name": "TerraDeed Labs",
                 "url": "https://terradeed.co.uk",
                 "email": "contact@terradeed.co.uk"
+            },
+            "input": {
+                "description": "URL to scrape with optional JavaScript rendering",
+                "example": {
+                    "url": "https://example.com",
+                    "js_render": False
+                }
+            },
+            "output": {
+                "description": "Scraped content in markdown format with metadata",
+                "fields": [
+                    {"name": "content", "type": "string", "description": "Extracted markdown content"},
+                    {"name": "url", "type": "string", "description": "Source URL"},
+                    {"name": "status", "type": "string", "description": "Response status (success)"},
+                    {"name": "word_count", "type": "integer", "description": "Approximate word count"},
+                    {"name": "title", "type": "string|null", "description": "Page title if available"},
+                    {"name": "js_rendered", "type": "boolean", "description": "Whether JavaScript was executed"}
+                ]
             }
         },
         "schema": {
