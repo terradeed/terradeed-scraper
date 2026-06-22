@@ -156,7 +156,7 @@ EXTRACT_ACCEPTS = [{
 }]
 
 # x402 Payment Required Response Helper
-def payment_required_response(accepts: list, resource_url: str, resource_description: str, resource_mime_type: str) -> JSONResponse:
+def payment_required_response(accepts: list, resource_url: str, resource_description: str, resource_mime_type: str, discovery_extension: dict) -> JSONResponse:
     """Return x402 v2 compliant 402 response with PAYMENT-REQUIRED header and resource object"""
     payload = {
         "x402Version": 2,
@@ -167,7 +167,7 @@ def payment_required_response(accepts: list, resource_url: str, resource_descrip
         },
         "accepts": accepts,
         "extensions": {
-            "bazaar": declare_discovery_extension()
+            "bazaar": discovery_extension
         }
     }
     payload_b64 = base64.b64encode(json.dumps(payload).encode()).decode()
@@ -177,16 +177,16 @@ def payment_required_response(accepts: list, resource_url: str, resource_descrip
         content={"error": "Payment required"}
     )
 
-def declare_discovery_extension():
-    """Return bazaar discovery extension declaration for Agentic Market indexing"""
+def declare_discovery_extension_scrape():
+    """Return bazaar discovery extension declaration for /scrape endpoint"""
     return {
         "type": "discovery",
         "version": "1.0",
         "resourceServer": "TerraDeed Scrape API",
         "capabilities": ["indexing", "search"],
         "info": {
-            "title": "TerraDeed Scrape API",
-            "description": "Pay-per-use web scraping and structured data extraction via x402 USDC or API keys",
+            "title": "TerraDeed Scrape API - Scrape",
+            "description": "Pay-per-use web scraping via x402 USDC or API keys. Returns clean LLM-ready markdown.",
             "version": "0.7.2",
             "contact": {
                 "name": "TerraDeed Labs",
@@ -235,6 +235,70 @@ def declare_discovery_extension():
         }
     }
 
+
+def declare_discovery_extension_extract():
+    """Return bazaar discovery extension declaration for /extract endpoint"""
+    return {
+        "type": "discovery",
+        "version": "1.0",
+        "resourceServer": "TerraDeed Scrape API",
+        "capabilities": ["indexing", "search"],
+        "info": {
+            "title": "TerraDeed Scrape API - Extract",
+            "description": "Schema-driven structured JSON extraction via x402 USDC or API keys. Extract specific fields from any URL.",
+            "version": "0.7.2",
+            "contact": {
+                "name": "TerraDeed Labs",
+                "url": "https://terradeed.co.uk",
+                "email": "contact@terradeed.co.uk"
+            },
+            "input": {
+                "description": "URL to extract data from with list of fields to extract",
+                "example": {
+                    "url": "https://example.com/product",
+                    "fields": ["product_name", "price", "description"],
+                    "js_render": False
+                }
+            },
+            "output": {
+                "description": "Structured JSON extraction with metadata",
+                "fields": [
+                    {"name": "url", "type": "string", "description": "Source URL"},
+                    {"name": "status", "type": "string", "description": "Response status (success)"},
+                    {"name": "data", "type": "object", "description": "Extracted fields as key-value pairs"},
+                    {"name": "fields_requested", "type": "array", "description": "List of fields requested"},
+                    {"name": "fields_extracted", "type": "array", "description": "List of fields successfully extracted"},
+                    {"name": "js_rendered", "type": "boolean", "description": "Whether JavaScript was executed"}
+                ],
+                "example": {
+                    "url": "https://example.com/product",
+                    "status": "success",
+                    "data": {
+                        "product_name": "Example Widget",
+                        "price": "$29.99",
+                        "description": "A high-quality example product for demonstration purposes."
+                    },
+                    "fields_requested": ["product_name", "price", "description"],
+                    "fields_extracted": ["product_name", "price", "description"],
+                    "js_rendered": False
+                }
+            }
+        },
+        "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "format": "uri"},
+                "status": {"type": "string", "enum": ["success"]},
+                "data": {"type": "object", "description": "Extracted fields"},
+                "fields_requested": {"type": "array", "items": {"type": "string"}},
+                "fields_extracted": {"type": "array", "items": {"type": "string"}},
+                "js_rendered": {"type": "boolean"}
+            },
+            "required": ["url", "status", "data", "fields_requested", "fields_extracted"]
+        }
+    }
+
 # FastAPI App
 app = FastAPI(
     title="TerraDeed Scrape API",
@@ -259,14 +323,16 @@ async def x402_auth_middleware(request: Request, call_next):
                     SCRAPE_ACCEPTS,
                     f"{BASE_URL}/scrape",
                     "Scrape any public URL - clean LLM-ready markdown",
-                    "application/json"
+                    "application/json",
+                    declare_discovery_extension_scrape()
                 )
             else:
                 return payment_required_response(
                     EXTRACT_ACCEPTS,
                     f"{BASE_URL}/extract",
                     "Schema-driven structured JSON extraction",
-                    "application/json"
+                    "application/json",
+                    declare_discovery_extension_extract()
                 )
     
     return await call_next(request)
@@ -402,7 +468,8 @@ async def scrape(body: ScrapeRequest, request: Request):
         SCRAPE_ACCEPTS,
         f"{BASE_URL}/scrape",
         "Scrape any public URL - clean LLM-ready markdown",
-        "application/json"
+        "application/json",
+        declare_discovery_extension_scrape()
     )
 
 @app.post("/extract")
@@ -435,7 +502,8 @@ async def extract(body: ExtractRequest, request: Request):
         EXTRACT_ACCEPTS,
         f"{BASE_URL}/extract",
         "Schema-driven structured JSON extraction",
-        "application/json"
+        "application/json",
+        declare_discovery_extension_extract()
     )
 
 @app.get("/")
