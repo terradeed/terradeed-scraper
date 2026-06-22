@@ -187,7 +187,7 @@ def declare_discovery_extension_scrape():
         "info": {
             "title": "TerraDeed Scrape API - Scrape",
             "description": "Pay-per-use web scraping via x402 USDC or API keys. Returns clean LLM-ready markdown.",
-            "version": "0.7.2",
+            "version": "0.7.6",
             "contact": {
                 "name": "TerraDeed Labs",
                 "url": "https://terradeed.co.uk",
@@ -246,7 +246,7 @@ def declare_discovery_extension_extract():
         "info": {
             "title": "TerraDeed Scrape API - Extract",
             "description": "Schema-driven structured JSON extraction via x402 USDC or API keys. Extract specific fields from any URL.",
-            "version": "0.7.2",
+            "version": "0.7.6",
             "contact": {
                 "name": "TerraDeed Labs",
                 "url": "https://terradeed.co.uk",
@@ -303,7 +303,7 @@ def declare_discovery_extension_extract():
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.2",
+    version="0.7.6",
 )
 
 # Middleware: x402 auth check BEFORE Pydantic validation
@@ -512,7 +512,7 @@ async def root():
         status_code=402,
         content={
             "name": "TerraDeed Scrape API",
-            "version": "0.7.2",
+            "version": "0.7.6",
             "authentication": {
                 "x402": {"header": "Payment-Signature", "currency": "USDC"},
                 "api_key": {"header": "Authorization: Bearer <key>", "credits": {"scrape": 1, "extract": 5}},
@@ -535,7 +535,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.2",
+        "version": "0.7.6",
         "anthropic": "configured" if ANTHROPIC_API_KEY else "missing",
         "auth_methods": ["x402", "api_key"],
         "api_keys": {"active": active_keys, "total_calls": total_calls}
