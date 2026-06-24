@@ -138,10 +138,7 @@ USDC_EXTRA = {"name": "USD Coin", "version": "2"}
 
 # Facilitator configurations
 facilitators = [
-    FacilitatorConfig(
-        url="https://facilitator.xpay.sh",
-        name="xpay.sh",
-    )
+    FacilitatorConfig(url="https://facilitator.xpay.sh")
 ]
 
 # Add CDP facilitator if credentials are available
@@ -149,7 +146,6 @@ if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
     facilitators.append(
         FacilitatorConfig(
             url="https://api.cdp.coinbase.com/platform/v2/x402/facilitator",
-            name="cdp",
             headers={
                 "CDP-API-KEY-ID": CDP_API_KEY_ID,
                 "CDP-API-KEY-SECRET": CDP_API_KEY_SECRET,
@@ -515,7 +511,7 @@ async def health():
     return {
         "status": "ok",
         "version": "0.7.9",
-        "facilitators": [f.name for f in facilitators],
+        "facilitators": [f.url for f in facilitators],
         "auth_methods": ["x402", "api_key"]
     }
 
