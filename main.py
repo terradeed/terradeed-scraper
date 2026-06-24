@@ -144,13 +144,7 @@ facilitators = [
 # Add CDP facilitator if credentials are available
 if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
     facilitators.append(
-        FacilitatorConfig(
-            url="https://api.cdp.coinbase.com/platform/v2/x402/facilitator",
-            headers={
-                "CDP-API-KEY-ID": CDP_API_KEY_ID,
-                "CDP-API-KEY-SECRET": CDP_API_KEY_SECRET,
-            }
-        )
+        FacilitatorConfig(url="https://api.cdp.coinbase.com/platform/v2/x402/facilitator")
     )
 
 # x402 accepts array with dual facilitators
