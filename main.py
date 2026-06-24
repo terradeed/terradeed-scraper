@@ -413,7 +413,7 @@ async def verify_x402_payment(payment_sig: str, path: str) -> bool:
             "paymentPayload": payment_data,
             "paymentRequirements": {
                 "scheme": accepted.get("scheme", "exact"),
-                "network": accepted.get("network", "base"),
+                "network": accepted.get("network", "eip155:8453"),
                 "asset": accepted.get("asset", USDC_BASE),
                 "amount": accepted.get("amount", "10000"),
                 "payTo": accepted.get("payTo", PAY_TO),
