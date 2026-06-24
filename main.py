@@ -407,15 +407,32 @@ async def verify_x402_payment(payment_sig: str, path: str) -> bool:
             headers["CDP-API-KEY-ID"] = CDP_API_KEY_ID
             headers["CDP-API-KEY-SECRET"] = CDP_API_KEY_SECRET
         
+        # Build verification payload
+        # Facilitator expects paymentPayload and paymentRequirements
+        verify_payload = {
+            "paymentPayload": payment_data,
+            "paymentRequirements": {
+                "scheme": accepted.get("scheme", "exact"),
+                "network": accepted.get("network", "base"),
+                "asset": accepted.get("asset", USDC_BASE),
+                "amount": accepted.get("amount", "10000"),
+                "payTo": accepted.get("payTo", PAY_TO),
+            }
+        }
+        
         # Call facilitator verify endpoint
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{facilitator_url}/verify",
                 headers=headers,
-                json=payment_data,
+                json=verify_payload,
                 timeout=30
             )
-            return response.status_code == 200
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result.get("isValid", False)
+            return False
     except Exception as e:
         print(f"Payment verification error: {e}")
         return False
