@@ -1,6 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
+Version 0.7.9 - CDP Dual Facilitator Support
 """
 
 import base64
@@ -33,6 +34,8 @@ EXTRACT_MODEL = "claude-sonnet-4-20250514"
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "terradeed-admin-2026")
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./terradeed.db")
+CDP_API_KEY_ID = os.environ.get("CDP_API_KEY_ID", "")
+CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
 
 DB_PATH = DATABASE_URL.replace("sqlite:///", "") if DATABASE_URL.startswith("sqlite://") else "./terradeed.db"
 
@@ -129,18 +132,12 @@ ensure_test_key()
 # x402 Config
 USDC_EXTRA = {"name": "USD Coin", "version": "2"}
 
-# CDP Facilitator Config (for Bazaar surfacing)
-CDP_API_KEY_ID = os.environ.get("CDP_API_KEY_ID", "")
-CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
-CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402/facilitator"
-XPAY_FACILITATOR_URL = "https://facilitator.xpay.sh"
+# Facilitator URLs
+XPAY_FACILITATOR = "https://facilitator.xpay.sh"
+CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402/facilitator"
 
-# Facilitator endpoints for middleware
-FACILITATOR_URLS = [XPAY_FACILITATOR_URL]
-if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
-    FACILITATOR_URLS.append(CDP_FACILITATOR_URL)
-
-# x402 accepts array - dual facilitator (xpay.sh primary, CDP for Bazaar)
+# Build accepts array with dual facilitators
+# Each accept entry includes the facilitator URL for verification routing
 SCRAPE_ACCEPTS = [
     {
         "scheme": "exact",
@@ -153,22 +150,25 @@ SCRAPE_ACCEPTS = [
         "mimeType": "application/json",
         "maxTimeoutSeconds": 300,
         "extra": USDC_EXTRA,
-        "facilitator": XPAY_FACILITATOR_URL,
+        "facilitator": XPAY_FACILITATOR,
     },
-    {
+]
+
+# Add CDP facilitator if credentials available
+if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
+    SCRAPE_ACCEPTS.append({
         "scheme": "exact",
         "network": NETWORK_CLIENT,
         "asset": USDC_BASE,
         "amount": "10000",
         "payTo": PAY_TO,
         "resource": f"{BASE_URL}/scrape",
-        "description": "Scrape any public URL - clean LLM-ready markdown (CDP)",
+        "description": "Scrape any public URL - clean LLM-ready markdown",
         "mimeType": "application/json",
         "maxTimeoutSeconds": 300,
         "extra": USDC_EXTRA,
-        "facilitator": CDP_FACILITATOR_URL,
-    }
-]
+        "facilitator": CDP_FACILITATOR,
+    })
 
 EXTRACT_ACCEPTS = [
     {
@@ -182,44 +182,24 @@ EXTRACT_ACCEPTS = [
         "mimeType": "application/json",
         "maxTimeoutSeconds": 300,
         "extra": USDC_EXTRA,
-        "facilitator": XPAY_FACILITATOR_URL,
+        "facilitator": XPAY_FACILITATOR,
     },
-    {
+]
+
+if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
+    EXTRACT_ACCEPTS.append({
         "scheme": "exact",
         "network": NETWORK_CLIENT,
         "asset": USDC_BASE,
         "amount": "50000",
         "payTo": PAY_TO,
         "resource": f"{BASE_URL}/extract",
-        "description": "Schema-driven structured JSON extraction (CDP)",
+        "description": "Schema-driven structured JSON extraction",
         "mimeType": "application/json",
         "maxTimeoutSeconds": 300,
         "extra": USDC_EXTRA,
-        "facilitator": CDP_FACILITATOR_URL,
-    }
-]
-
-# x402 Payment Required Response Helper
-def payment_required_response(accepts: list, resource_url: str, resource_description: str, resource_mime_type: str, discovery_extension: dict) -> JSONResponse:
-    """Return x402 v2 compliant 402 response with PAYMENT-REQUIRED header and resource object"""
-    payload = {
-        "x402Version": 2,
-        "resource": {
-            "url": resource_url,
-            "description": resource_description,
-            "mimeType": resource_mime_type
-        },
-        "accepts": accepts,
-        "extensions": {
-            "bazaar": discovery_extension
-        }
-    }
-    payload_b64 = base64.b64encode(json.dumps(payload).encode()).decode()
-    return JSONResponse(
-        status_code=402,
-        headers={"PAYMENT-REQUIRED": payload_b64},
-        content={"error": "Payment required"}
-    )
+        "facilitator": CDP_FACILITATOR,
+    })
 
 def declare_discovery_extension_scrape():
     """Return bazaar discovery extension declaration for /scrape endpoint - CDP v2 compliant"""
@@ -227,7 +207,7 @@ def declare_discovery_extension_scrape():
         "info": {
             "title": "TerraDeed Scrape API - Scrape",
             "description": "Pay-per-use web scraping via x402 USDC or API keys. Returns clean LLM-ready markdown.",
-            "version": "0.7.8",
+            "version": "0.7.9",
             "contact": {
                 "name": "TerraDeed Labs",
                 "url": "https://terradeed.co.uk",
@@ -284,14 +264,13 @@ def declare_discovery_extension_scrape():
         }
     }
 
-
 def declare_discovery_extension_extract():
     """Return bazaar discovery extension declaration for /extract endpoint - CDP v2 compliant"""
     return {
         "info": {
             "title": "TerraDeed Scrape API - Extract",
             "description": "Schema-driven structured JSON extraction via x402 USDC or API keys. Extract specific fields from any URL.",
-            "version": "0.7.8",
+            "version": "0.7.9",
             "contact": {
                 "name": "TerraDeed Labs",
                 "url": "https://terradeed.co.uk",
@@ -358,7 +337,7 @@ def declare_discovery_extension_extract():
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.8",
+    version="0.7.9",
 )
 
 # Middleware: x402 auth check BEFORE Pydantic validation
@@ -389,8 +368,57 @@ async def x402_auth_middleware(request: Request, call_next):
                     "application/json",
                     declare_discovery_extension_extract()
                 )
+        
+        # If x402 payment signature present, verify it
+        if auth_method == "x402":
+            payment_sig = request.headers.get("payment-signature") or request.headers.get("PAYMENT-SIGNATURE")
+            if payment_sig:
+                is_valid = await verify_x402_payment(payment_sig, request.url.path)
+                if not is_valid:
+                    return JSONResponse(
+                        status_code=402,
+                        content={"error": "Payment verification failed"}
+                    )
+                # Payment valid - add marker to request state
+                request.state.x402_payment_valid = True
     
     return await call_next(request)
+
+async def verify_x402_payment(payment_sig: str, path: str) -> bool:
+    """
+    Verify x402 payment signature against the appropriate facilitator.
+    Supports both xpay.sh and CDP facilitators.
+    """
+    try:
+        # Parse payment payload
+        payment_data = json.loads(base64.b64decode(payment_sig))
+        
+        # Determine which facilitator to use
+        accepted = payment_data.get("accepted", {})
+        facilitator_url = accepted.get("facilitator")
+        
+        if not facilitator_url:
+            # Default to xpay.sh if not specified
+            facilitator_url = XPAY_FACILITATOR
+        
+        # Build verification headers
+        headers = {"Content-Type": "application/json"}
+        if CDP_FACILITATOR in facilitator_url and CDP_API_KEY_ID and CDP_API_KEY_SECRET:
+            headers["CDP-API-KEY-ID"] = CDP_API_KEY_ID
+            headers["CDP-API-KEY-SECRET"] = CDP_API_KEY_SECRET
+        
+        # Call facilitator verify endpoint
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{facilitator_url}/verify",
+                headers=headers,
+                json=payment_data,
+                timeout=30
+            )
+            return response.status_code == 200
+    except Exception as e:
+        print(f"Payment verification error: {e}")
+        return False
 
 # Models
 class ScrapeRequest(BaseModel):
@@ -494,13 +522,37 @@ async def get_auth_method(request: Request) -> tuple[str, Optional[str]]:
     auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
         return ("api_key", auth_header[7:].strip())
-    if request.headers.get("payment-signature"):
+    if request.headers.get("payment-signature") or request.headers.get("PAYMENT-SIGNATURE"):
         return ("x402", None)
     return ("none", None)
+
+# x402 Payment Required Response Helper
+def payment_required_response(accepts, resource_url, description, mime_type, bazaar_extension):
+    """Return x402 v2 compliant 402 response with PAYMENT-REQUIRED header and resource object"""
+    payload = {
+        "x402Version": 2,
+        "error": "Payment required",
+        "resource": {
+            "url": resource_url,
+            "description": description,
+            "mimeType": mime_type
+        },
+        "accepts": accepts,
+        "extensions": {
+            "bazaar": bazaar_extension
+        }
+    }
+    
+    return JSONResponse(
+        status_code=402,
+        headers={"PAYMENT-REQUIRED": base64.b64encode(json.dumps(payload).encode()).decode()},
+        content={"error": "Payment required"}
+    )
 
 # Endpoints
 @app.post("/scrape")
 async def scrape(body: ScrapeRequest, request: Request):
+    # Check for API key auth
     auth_method, api_key = await get_auth_method(request)
     
     if auth_method == "api_key":
@@ -509,7 +561,6 @@ async def scrape(body: ScrapeRequest, request: Request):
             raise HTTPException(status_code=401, detail="Invalid API key")
         if "error" in key_info:
             raise HTTPException(status_code=401, detail=key_info["error"])
-        
         if key_info["credits_remaining"] < SCRAPE_CREDITS:
             raise HTTPException(status_code=402, detail={"error": "Insufficient credits", "credits_remaining": key_info["credits_remaining"], "credits_required": SCRAPE_CREDITS})
         
@@ -519,6 +570,13 @@ async def scrape(body: ScrapeRequest, request: Request):
         result["credits_remaining"] = key_info["credits_remaining"] - SCRAPE_CREDITS
         return result
     
+    # Check for x402 payment (verified in middleware)
+    if getattr(request.state, "x402_payment_valid", False):
+        result = await _scrape(body.url, body.js_render)
+        result["auth_method"] = "x402"
+        return result
+    
+    # No valid auth
     return payment_required_response(
         SCRAPE_ACCEPTS,
         f"{BASE_URL}/scrape",
@@ -534,6 +592,7 @@ async def extract(body: ExtractRequest, request: Request):
     if len(body.fields) > 20:
         raise HTTPException(status_code=422, detail="Maximum 20 fields")
     
+    # Check for API key auth
     auth_method, api_key = await get_auth_method(request)
     
     if auth_method == "api_key":
@@ -542,7 +601,6 @@ async def extract(body: ExtractRequest, request: Request):
             raise HTTPException(status_code=401, detail="Invalid API key")
         if "error" in key_info:
             raise HTTPException(status_code=401, detail=key_info["error"])
-        
         if key_info["credits_remaining"] < EXTRACT_CREDITS:
             raise HTTPException(status_code=402, detail={"error": "Insufficient credits", "credits_remaining": key_info["credits_remaining"], "credits_required": EXTRACT_CREDITS})
         
@@ -553,6 +611,14 @@ async def extract(body: ExtractRequest, request: Request):
         result["credits_remaining"] = key_info["credits_remaining"] - EXTRACT_CREDITS
         return result
     
+    # Check for x402 payment (verified in middleware)
+    if getattr(request.state, "x402_payment_valid", False):
+        scrape_result = await _scrape(body.url, body.js_render)
+        result = await _extract_structured(scrape_result["content"], body.url, body.fields, scrape_result["js_rendered"])
+        result["auth_method"] = "x402"
+        return result
+    
+    # No valid auth
     return payment_required_response(
         EXTRACT_ACCEPTS,
         f"{BASE_URL}/extract",
@@ -561,70 +627,52 @@ async def extract(body: ExtractRequest, request: Request):
         declare_discovery_extension_extract()
     )
 
-@app.get("/")
-async def root():
-    return JSONResponse(
-        status_code=402,
-        content={
-            "name": "TerraDeed Scrape API",
-            "version": "0.7.6",
-            "authentication": {
-                "x402": {"header": "Payment-Signature", "currency": "USDC"},
-                "api_key": {"header": "Authorization: Bearer <key>", "credits": {"scrape": 1, "extract": 5}},
-            },
-            "endpoints": {
-                "POST /scrape": {"price_usdc": SCRAPE_PRICE, "credits": SCRAPE_CREDITS},
-                "POST /extract": {"price_usdc": EXTRACT_PRICE, "credits": EXTRACT_CREDITS},
-            },
-            "accepts": SCRAPE_ACCEPTS + EXTRACT_ACCEPTS,
-        },
-    )
-
 @app.get("/health")
 async def health():
-    with get_db() as conn:
-        cursor = conn.execute("SELECT COUNT(*) as count FROM api_keys WHERE is_active = 1")
-        active_keys = cursor.fetchone()["count"]
-        cursor = conn.execute("SELECT SUM(total_calls) as total FROM api_keys")
-        total_calls = cursor.fetchone()["total"] or 0
-    
     return {
         "status": "ok",
-        "version": "0.7.6",
-        "anthropic": "configured" if ANTHROPIC_API_KEY else "missing",
-        "auth_methods": ["x402", "api_key"],
-        "api_keys": {"active": active_keys, "total_calls": total_calls}
+        "version": "0.7.9",
+        "facilitators": [XPAY_FACILITATOR] + ([CDP_FACILITATOR] if CDP_API_KEY_ID else []),
+        "auth_methods": ["x402", "api_key"]
     }
 
 @app.get("/.well-known/x402")
 async def well_known_x402():
     return {
-        "version": 2,
-        "name": "TerraDeed Scrape API",
+        "version": "2",
+        "facilitators": [XPAY_FACILITATOR] + ([CDP_FACILITATOR] if CDP_API_KEY_ID else []),
         "resources": [
-            {"url": f"{BASE_URL}/scrape", "method": "POST", "accepts": SCRAPE_ACCEPTS},
-            {"url": f"{BASE_URL}/extract", "method": "POST", "accepts": EXTRACT_ACCEPTS},
-        ],
+            {
+                "path": "/scrape",
+                "price": SCRAPE_PRICE,
+                "accepts": SCRAPE_ACCEPTS
+            },
+            {
+                "path": "/extract", 
+                "price": EXTRACT_PRICE,
+                "accepts": EXTRACT_ACCEPTS
+            }
+        ]
     }
 
+# Admin endpoints
 @app.post("/admin/keys")
 async def create_key(request: CreateKeyRequest):
     if request.admin_secret != ADMIN_SECRET:
         raise HTTPException(status_code=401, detail="Invalid admin secret")
     
-    full_key = f"td_sk_{secrets.token_urlsafe(32)}"
-    key_hash = hash_key(full_key)
-    key_prefix = get_key_prefix(full_key)
-    created_at = datetime.now(timezone.utc).isoformat()
+    new_key = f"td_sk_{secrets.token_hex(16)}"
+    key_hash = hash_key(new_key)
+    timestamp = datetime.now(timezone.utc).isoformat()
     
     with get_db() as conn:
         conn.execute(
             "INSERT INTO api_keys (key_hash, key_prefix, credits_remaining, created_at) VALUES (?, ?, ?, ?)",
-            (key_hash, key_prefix, request.credits, created_at)
+            (key_hash, get_key_prefix(new_key), request.credits, timestamp)
         )
         conn.commit()
     
-    return {"api_key": full_key, "credits": request.credits, "created_at": created_at, "message": "Store securely - will not be shown again"}
+    return {"key": new_key, "credits": request.credits}
 
 @app.get("/admin/keys")
 async def list_keys(admin_secret: str):
@@ -632,20 +680,13 @@ async def list_keys(admin_secret: str):
         raise HTTPException(status_code=401, detail="Invalid admin secret")
     
     with get_db() as conn:
-        cursor = conn.execute("SELECT key_prefix, credits_remaining, total_calls, created_at, is_active FROM api_keys ORDER BY created_at DESC")
+        cursor = conn.execute(
+            "SELECT key_prefix, credits_remaining, created_at, last_used_at, total_calls, is_active FROM api_keys ORDER BY created_at DESC"
+        )
         keys = [dict(row) for row in cursor.fetchall()]
     
-    return {"keys": keys, "count": len(keys)}
-
-@app.get("/test-key")
-async def test_key(api_key: str):
-    info = validate_api_key(api_key)
-    if not info:
-        return {"valid": False, "error": "Invalid key"}
-    if "error" in info:
-        return {"valid": False, "error": info["error"]}
-    return {"valid": True, **info}
+    return {"keys": keys}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
