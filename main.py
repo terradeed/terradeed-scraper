@@ -21,8 +21,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # x402 imports
-from x402 import PaymentMiddlewareASGI
-from x402.facilitator import FacilitatorConfig
+from x402.http.middleware.fastapi import PaymentMiddlewareASGI
+from x402.http import FacilitatorConfig
 
 # Config
 PAY_TO = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
