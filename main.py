@@ -178,22 +178,20 @@ def payment_required_response(accepts: list, resource_url: str, resource_descrip
     )
 
 def declare_discovery_extension_scrape():
-    """Return bazaar discovery extension declaration for /scrape endpoint"""
+    """Return bazaar discovery extension declaration for /scrape endpoint - CDP v2 compliant"""
     return {
-        "type": "discovery",
-        "version": "1.0",
-        "resourceServer": "TerraDeed Scrape API",
-        "capabilities": ["indexing", "search"],
         "info": {
             "title": "TerraDeed Scrape API - Scrape",
             "description": "Pay-per-use web scraping via x402 USDC or API keys. Returns clean LLM-ready markdown.",
-            "version": "0.7.6",
+            "version": "0.7.7",
             "contact": {
                 "name": "TerraDeed Labs",
                 "url": "https://terradeed.co.uk",
                 "email": "contact@terradeed.co.uk"
             },
             "input": {
+                "type": "http",
+                "method": "POST",
                 "description": "URL to scrape with optional JavaScript rendering",
                 "example": {
                     "url": "https://example.com",
@@ -201,17 +199,10 @@ def declare_discovery_extension_scrape():
                 }
             },
             "output": {
+                "type": "json",
                 "description": "Scraped content in markdown format with metadata",
-                "fields": [
-                    {"name": "content", "type": "string", "description": "Extracted markdown content"},
-                    {"name": "url", "type": "string", "description": "Source URL"},
-                    {"name": "status", "type": "string", "description": "Response status (success)"},
-                    {"name": "word_count", "type": "integer", "description": "Approximate word count"},
-                    {"name": "title", "type": "string|null", "description": "Page title if available"},
-                    {"name": "js_rendered", "type": "boolean", "description": "Whether JavaScript was executed"}
-                ],
                 "example": {
-                    "content": "## Example Domain\n\nThis domain is for use in illustrative examples in documents. You may use this domain in literature without prior coordination or asking for permission.",
+                    "content": "## Example Domain\n\nThis domain is for use in illustrative examples in documents.",
                     "url": "https://example.com",
                     "status": "success",
                     "word_count": 28,
@@ -224,35 +215,47 @@ def declare_discovery_extension_scrape():
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "properties": {
-                "content": {"type": "string", "description": "Extracted markdown content"},
-                "url": {"type": "string", "format": "uri"},
-                "status": {"type": "string", "enum": ["success"]},
-                "word_count": {"type": "integer"},
-                "title": {"type": ["string", "null"]},
-                "js_rendered": {"type": "boolean"}
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "format": "uri", "description": "URL to scrape"},
+                        "js_render": {"type": "boolean", "description": "Enable JavaScript rendering", "default": False}
+                    },
+                    "required": ["url"]
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "description": "Extracted markdown content"},
+                        "url": {"type": "string", "format": "uri"},
+                        "status": {"type": "string", "enum": ["success"]},
+                        "word_count": {"type": "integer"},
+                        "title": {"type": ["string", "null"]},
+                        "js_rendered": {"type": "boolean"}
+                    },
+                    "required": ["content", "url", "status"]
+                }
             },
-            "required": ["content", "url", "status"]
+            "required": ["input"]
         }
     }
 
 
 def declare_discovery_extension_extract():
-    """Return bazaar discovery extension declaration for /extract endpoint"""
+    """Return bazaar discovery extension declaration for /extract endpoint - CDP v2 compliant"""
     return {
-        "type": "discovery",
-        "version": "1.0",
-        "resourceServer": "TerraDeed Scrape API",
-        "capabilities": ["indexing", "search"],
         "info": {
             "title": "TerraDeed Scrape API - Extract",
             "description": "Schema-driven structured JSON extraction via x402 USDC or API keys. Extract specific fields from any URL.",
-            "version": "0.7.6",
+            "version": "0.7.7",
             "contact": {
                 "name": "TerraDeed Labs",
                 "url": "https://terradeed.co.uk",
                 "email": "contact@terradeed.co.uk"
             },
             "input": {
+                "type": "http",
+                "method": "POST",
                 "description": "URL to extract data from with list of fields to extract",
                 "example": {
                     "url": "https://example.com/product",
@@ -261,15 +264,8 @@ def declare_discovery_extension_extract():
                 }
             },
             "output": {
+                "type": "json",
                 "description": "Structured JSON extraction with metadata",
-                "fields": [
-                    {"name": "url", "type": "string", "description": "Source URL"},
-                    {"name": "status", "type": "string", "description": "Response status (success)"},
-                    {"name": "data", "type": "object", "description": "Extracted fields as key-value pairs"},
-                    {"name": "fields_requested", "type": "array", "description": "List of fields requested"},
-                    {"name": "fields_extracted", "type": "array", "description": "List of fields successfully extracted"},
-                    {"name": "js_rendered", "type": "boolean", "description": "Whether JavaScript was executed"}
-                ],
                 "example": {
                     "url": "https://example.com/product",
                     "status": "success",
@@ -288,14 +284,29 @@ def declare_discovery_extension_extract():
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "properties": {
-                "url": {"type": "string", "format": "uri"},
-                "status": {"type": "string", "enum": ["success"]},
-                "data": {"type": "object", "description": "Extracted fields"},
-                "fields_requested": {"type": "array", "items": {"type": "string"}},
-                "fields_extracted": {"type": "array", "items": {"type": "string"}},
-                "js_rendered": {"type": "boolean"}
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "format": "uri", "description": "URL to extract data from"},
+                        "fields": {"type": "array", "items": {"type": "string"}, "description": "List of field names to extract"},
+                        "js_render": {"type": "boolean", "description": "Enable JavaScript rendering", "default": False}
+                    },
+                    "required": ["url", "fields"]
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "format": "uri"},
+                        "status": {"type": "string", "enum": ["success"]},
+                        "data": {"type": "object", "description": "Extracted fields"},
+                        "fields_requested": {"type": "array", "items": {"type": "string"}},
+                        "fields_extracted": {"type": "array", "items": {"type": "string"}},
+                        "js_rendered": {"type": "boolean"}
+                    },
+                    "required": ["url", "status", "data", "fields_requested", "fields_extracted"]
+                }
             },
-            "required": ["url", "status", "data", "fields_requested", "fields_extracted"]
+            "required": ["input"]
         }
     }
 
@@ -303,7 +314,7 @@ def declare_discovery_extension_extract():
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.6",
+    version="0.7.7",
 )
 
 # Middleware: x402 auth check BEFORE Pydantic validation
