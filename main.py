@@ -129,31 +129,75 @@ ensure_test_key()
 # x402 Config
 USDC_EXTRA = {"name": "USD Coin", "version": "2"}
 
-SCRAPE_ACCEPTS = [{
-    "scheme": "exact",
-    "network": NETWORK_CLIENT,
-    "asset": USDC_BASE,
-    "amount": "10000",
-    "payTo": PAY_TO,
-    "resource": f"{BASE_URL}/scrape",
-    "description": "Scrape any public URL - clean LLM-ready markdown",
-    "mimeType": "application/json",
-    "maxTimeoutSeconds": 300,
-    "extra": USDC_EXTRA,
-}]
+# CDP Facilitator Config (for Bazaar surfacing)
+CDP_API_KEY_ID = os.environ.get("CDP_API_KEY_ID", "")
+CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
+CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402/facilitator"
+XPAY_FACILITATOR_URL = "https://facilitator.xpay.sh"
 
-EXTRACT_ACCEPTS = [{
-    "scheme": "exact",
-    "network": NETWORK_CLIENT,
-    "asset": USDC_BASE,
-    "amount": "50000",
-    "payTo": PAY_TO,
-    "resource": f"{BASE_URL}/extract",
-    "description": "Schema-driven structured JSON extraction",
-    "mimeType": "application/json",
-    "maxTimeoutSeconds": 300,
-    "extra": USDC_EXTRA,
-}]
+# Facilitator endpoints for middleware
+FACILITATOR_URLS = [XPAY_FACILITATOR_URL]
+if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
+    FACILITATOR_URLS.append(CDP_FACILITATOR_URL)
+
+# x402 accepts array - dual facilitator (xpay.sh primary, CDP for Bazaar)
+SCRAPE_ACCEPTS = [
+    {
+        "scheme": "exact",
+        "network": NETWORK_CLIENT,
+        "asset": USDC_BASE,
+        "amount": "10000",
+        "payTo": PAY_TO,
+        "resource": f"{BASE_URL}/scrape",
+        "description": "Scrape any public URL - clean LLM-ready markdown",
+        "mimeType": "application/json",
+        "maxTimeoutSeconds": 300,
+        "extra": USDC_EXTRA,
+        "facilitator": XPAY_FACILITATOR_URL,
+    },
+    {
+        "scheme": "exact",
+        "network": NETWORK_CLIENT,
+        "asset": USDC_BASE,
+        "amount": "10000",
+        "payTo": PAY_TO,
+        "resource": f"{BASE_URL}/scrape",
+        "description": "Scrape any public URL - clean LLM-ready markdown (CDP)",
+        "mimeType": "application/json",
+        "maxTimeoutSeconds": 300,
+        "extra": USDC_EXTRA,
+        "facilitator": CDP_FACILITATOR_URL,
+    }
+]
+
+EXTRACT_ACCEPTS = [
+    {
+        "scheme": "exact",
+        "network": NETWORK_CLIENT,
+        "asset": USDC_BASE,
+        "amount": "50000",
+        "payTo": PAY_TO,
+        "resource": f"{BASE_URL}/extract",
+        "description": "Schema-driven structured JSON extraction",
+        "mimeType": "application/json",
+        "maxTimeoutSeconds": 300,
+        "extra": USDC_EXTRA,
+        "facilitator": XPAY_FACILITATOR_URL,
+    },
+    {
+        "scheme": "exact",
+        "network": NETWORK_CLIENT,
+        "asset": USDC_BASE,
+        "amount": "50000",
+        "payTo": PAY_TO,
+        "resource": f"{BASE_URL}/extract",
+        "description": "Schema-driven structured JSON extraction (CDP)",
+        "mimeType": "application/json",
+        "maxTimeoutSeconds": 300,
+        "extra": USDC_EXTRA,
+        "facilitator": CDP_FACILITATOR_URL,
+    }
+]
 
 # x402 Payment Required Response Helper
 def payment_required_response(accepts: list, resource_url: str, resource_description: str, resource_mime_type: str, discovery_extension: dict) -> JSONResponse:
@@ -183,7 +227,7 @@ def declare_discovery_extension_scrape():
         "info": {
             "title": "TerraDeed Scrape API - Scrape",
             "description": "Pay-per-use web scraping via x402 USDC or API keys. Returns clean LLM-ready markdown.",
-            "version": "0.7.7",
+            "version": "0.7.8",
             "contact": {
                 "name": "TerraDeed Labs",
                 "url": "https://terradeed.co.uk",
@@ -247,7 +291,7 @@ def declare_discovery_extension_extract():
         "info": {
             "title": "TerraDeed Scrape API - Extract",
             "description": "Schema-driven structured JSON extraction via x402 USDC or API keys. Extract specific fields from any URL.",
-            "version": "0.7.7",
+            "version": "0.7.8",
             "contact": {
                 "name": "TerraDeed Labs",
                 "url": "https://terradeed.co.uk",
@@ -314,7 +358,7 @@ def declare_discovery_extension_extract():
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.7",
+    version="0.7.8",
 )
 
 # Middleware: x402 auth check BEFORE Pydantic validation
