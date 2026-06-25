@@ -175,7 +175,7 @@ if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
 x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
 
 # Register bazaar extension for discovery
-x402_server.register_extension(bazaar_resource_server_extension())
+x402_server.register_extension(bazaar_resource_server_extension)
 
 # Resource configurations for x402
 SCRAPE_RESOURCE = {
