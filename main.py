@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.7.9 - CDP Dual Facilitator Support
+Version 0.7.10 - CDP Bazaar Integration with x402 Resource Server
 """
 
 import base64
@@ -19,6 +19,15 @@ import trafilatura
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+# x402 imports
+from x402 import FacilitatorClient, Network
+from x402.server import x402ResourceServer
+from x402.extensions.bazaar import (
+    bazaar_resource_server_extension,
+    declare_discovery_extension,
+    OutputConfig,
+)
 
 # Config
 PAY_TO = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
@@ -129,313 +138,151 @@ def ensure_test_key():
 
 ensure_test_key()
 
-# x402 Config
-USDC_EXTRA = {"name": "USD Coin", "version": "2"}
-
-# Facilitator URLs
+# x402 Facilitator Configuration
 XPAY_FACILITATOR = "https://facilitator.xpay.sh"
 CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402/facilitator"
 
-# Build accepts array with dual facilitators
-# Each accept entry includes the facilitator URL for verification routing
-SCRAPE_ACCEPTS = [
-    {
-        "scheme": "exact",
-        "network": NETWORK_CLIENT,
-        "asset": USDC_BASE,
-        "amount": "10000",
-        "payTo": PAY_TO,
-        "resource": f"{BASE_URL}/scrape",
-        "description": "Scrape any public URL - clean LLM-ready markdown",
-        "mimeType": "application/json",
-        "maxTimeoutSeconds": 300,
-        "extra": USDC_EXTRA,
-        "facilitator": XPAY_FACILITATOR,
-    },
-]
+# Create facilitator clients
+facilitator_clients = []
 
-# Add CDP facilitator if credentials available
+# xpay.sh facilitator (always included)
+facilitator_clients.append(FacilitatorClient(url=XPAY_FACILITATOR))
+
+# CDP facilitator (if credentials available)
 if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
-    SCRAPE_ACCEPTS.append({
-        "scheme": "exact",
-        "network": NETWORK_CLIENT,
-        "asset": USDC_BASE,
-        "amount": "10000",
-        "payTo": PAY_TO,
-        "resource": f"{BASE_URL}/scrape",
-        "description": "Scrape any public URL - clean LLM-ready markdown",
-        "mimeType": "application/json",
-        "maxTimeoutSeconds": 300,
-        "extra": USDC_EXTRA,
-        "facilitator": CDP_FACILITATOR,
-    })
+    def create_cdp_headers():
+        return {
+            "CDP-API-KEY-ID": CDP_API_KEY_ID,
+            "CDP-API-KEY-SECRET": CDP_API_KEY_SECRET,
+        }
+    
+    facilitator_clients.append(FacilitatorClient(
+        url=CDP_FACILITATOR,
+        create_headers=create_cdp_headers
+    ))
 
-EXTRACT_ACCEPTS = [
-    {
-        "scheme": "exact",
-        "network": NETWORK_CLIENT,
-        "asset": USDC_BASE,
-        "amount": "50000",
-        "payTo": PAY_TO,
-        "resource": f"{BASE_URL}/extract",
-        "description": "Schema-driven structured JSON extraction",
-        "mimeType": "application/json",
-        "maxTimeoutSeconds": 300,
-        "extra": USDC_EXTRA,
-        "facilitator": XPAY_FACILITATOR,
-    },
-]
+# Create x402 resource server with all facilitators
+x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
 
-if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
-    EXTRACT_ACCEPTS.append({
-        "scheme": "exact",
-        "network": NETWORK_CLIENT,
-        "asset": USDC_BASE,
-        "amount": "50000",
-        "payTo": PAY_TO,
-        "resource": f"{BASE_URL}/extract",
-        "description": "Schema-driven structured JSON extraction",
-        "mimeType": "application/json",
-        "maxTimeoutSeconds": 300,
-        "extra": USDC_EXTRA,
-        "facilitator": CDP_FACILITATOR,
-    })
+# Register bazaar extension for discovery
+x402_server.register_extension(bazaar_resource_server_extension())
 
-def declare_discovery_extension_scrape():
-    """Return bazaar discovery extension declaration for /scrape endpoint - CDP v2 compliant"""
-    return {
-        "info": {
-            "title": "TerraDeed Scrape API - Scrape",
-            "description": "Pay-per-use web scraping via x402 USDC or API keys. Returns clean LLM-ready markdown.",
-            "version": "0.7.9",
-            "contact": {
-                "name": "TerraDeed Labs",
-                "url": "https://terradeed.co.uk",
-                "email": "contact@terradeed.co.uk"
-            },
-            "input": {
-                "type": "http",
-                "method": "POST",
-                "description": "URL to scrape with optional JavaScript rendering",
-                "example": {
-                    "url": "https://example.com",
-                    "js_render": False
-                }
-            },
-            "output": {
-                "type": "json",
-                "description": "Scraped content in markdown format with metadata",
-                "example": {
-                    "content": "## Example Domain\n\nThis domain is for use in illustrative examples in documents.",
-                    "url": "https://example.com",
-                    "status": "success",
-                    "word_count": 28,
-                    "title": "Example Domain",
-                    "js_rendered": False
-                }
-            }
+# Resource configurations for x402
+SCRAPE_RESOURCE = {
+    "url": f"{BASE_URL}/scrape",
+    "description": "Scrape any public URL - clean LLM-ready markdown",
+    "mimeType": "application/json",
+}
+
+EXTRACT_RESOURCE = {
+    "url": f"{BASE_URL}/extract",
+    "description": "Schema-driven structured JSON extraction",
+    "mimeType": "application/json",
+}
+
+# Payment requirements
+SCRAPE_REQUIREMENTS = {
+    "scheme": "exact",
+    "network": Network.BASE,
+    "asset": USDC_BASE,
+    "amount": "10000",  # $0.01 in atomic units
+    "payTo": PAY_TO,
+    "maxTimeoutSeconds": 300,
+}
+
+EXTRACT_REQUIREMENTS = {
+    "scheme": "exact",
+    "network": Network.BASE,
+    "asset": USDC_BASE,
+    "amount": "50000",  # $0.05 in atomic units
+    "payTo": PAY_TO,
+    "maxTimeoutSeconds": 300,
+}
+
+# Bazaar discovery extensions using declare_discovery_extension
+SCRAPE_BAZAAR_EXT = declare_discovery_extension(
+    input={"url": "https://example.com", "js_render": False},
+    input_schema={
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "format": "uri", "description": "URL to scrape"},
+            "js_render": {"type": "boolean", "description": "Enable JavaScript rendering", "default": False}
         },
-        "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": ["url"]
+    },
+    body_type="json",
+    output=OutputConfig(
+        example={
+            "content": "## Example Domain\n\nThis domain is for use in illustrative examples.",
+            "url": "https://example.com",
+            "status": "success",
+            "word_count": 28,
+            "title": "Example Domain",
+            "js_rendered": False,
+            "auth_method": "x402"
+        },
+        schema={
             "type": "object",
             "properties": {
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "url": {"type": "string", "format": "uri", "description": "URL to scrape"},
-                        "js_render": {"type": "boolean", "description": "Enable JavaScript rendering", "default": False}
-                    },
-                    "required": ["url"]
-                },
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string", "description": "Extracted markdown content"},
-                        "url": {"type": "string", "format": "uri"},
-                        "status": {"type": "string", "enum": ["success"]},
-                        "word_count": {"type": "integer"},
-                        "title": {"type": ["string", "null"]},
-                        "js_rendered": {"type": "boolean"}
-                    },
-                    "required": ["content", "url", "status"]
-                }
+                "content": {"type": "string", "description": "Extracted markdown content"},
+                "url": {"type": "string", "format": "uri"},
+                "status": {"type": "string", "enum": ["success"]},
+                "word_count": {"type": "integer"},
+                "title": {"type": ["string", "null"]},
+                "js_rendered": {"type": "boolean"},
+                "auth_method": {"type": "string", "enum": ["x402", "api_key"]}
             },
-            "required": ["input"]
+            "required": ["content", "url", "status"]
         }
-    }
+    )
+)
 
-def declare_discovery_extension_extract():
-    """Return bazaar discovery extension declaration for /extract endpoint - CDP v2 compliant"""
-    return {
-        "info": {
-            "title": "TerraDeed Scrape API - Extract",
-            "description": "Schema-driven structured JSON extraction via x402 USDC or API keys. Extract specific fields from any URL.",
-            "version": "0.7.9",
-            "contact": {
-                "name": "TerraDeed Labs",
-                "url": "https://terradeed.co.uk",
-                "email": "contact@terradeed.co.uk"
-            },
-            "input": {
-                "type": "http",
-                "method": "POST",
-                "description": "URL to extract data from with list of fields to extract",
-                "example": {
-                    "url": "https://example.com/product",
-                    "fields": ["product_name", "price", "description"],
-                    "js_render": False
-                }
-            },
-            "output": {
-                "type": "json",
-                "description": "Structured JSON extraction with metadata",
-                "example": {
-                    "url": "https://example.com/product",
-                    "status": "success",
-                    "data": {
-                        "product_name": "Example Widget",
-                        "price": "$29.99",
-                        "description": "A high-quality example product for demonstration purposes."
-                    },
-                    "fields_requested": ["product_name", "price", "description"],
-                    "fields_extracted": ["product_name", "price", "description"],
-                    "js_rendered": False
-                }
-            }
+EXTRACT_BAZAAR_EXT = declare_discovery_extension(
+    input={"url": "https://example.com/product", "fields": ["name", "price"], "js_render": False},
+    input_schema={
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "format": "uri", "description": "URL to extract data from"},
+            "fields": {"type": "array", "items": {"type": "string"}, "description": "List of field names to extract"},
+            "js_render": {"type": "boolean", "description": "Enable JavaScript rendering", "default": False}
         },
-        "schema": {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "required": ["url", "fields"]
+    },
+    body_type="json",
+    output=OutputConfig(
+        example={
+            "url": "https://example.com/product",
+            "status": "success",
+            "data": {"name": "Example Product", "price": "$29.99"},
+            "fields_requested": ["name", "price"],
+            "fields_extracted": ["name", "price"],
+            "js_rendered": False,
+            "model": EXTRACT_MODEL,
+            "auth_method": "x402"
+        },
+        schema={
             "type": "object",
             "properties": {
-                "input": {
-                    "type": "object",
-                    "properties": {
-                        "url": {"type": "string", "format": "uri", "description": "URL to extract data from"},
-                        "fields": {"type": "array", "items": {"type": "string"}, "description": "List of field names to extract"},
-                        "js_render": {"type": "boolean", "description": "Enable JavaScript rendering", "default": False}
-                    },
-                    "required": ["url", "fields"]
-                },
-                "output": {
-                    "type": "object",
-                    "properties": {
-                        "url": {"type": "string", "format": "uri"},
-                        "status": {"type": "string", "enum": ["success"]},
-                        "data": {"type": "object", "description": "Extracted fields"},
-                        "fields_requested": {"type": "array", "items": {"type": "string"}},
-                        "fields_extracted": {"type": "array", "items": {"type": "string"}},
-                        "js_rendered": {"type": "boolean"}
-                    },
-                    "required": ["url", "status", "data", "fields_requested", "fields_extracted"]
-                }
+                "url": {"type": "string", "format": "uri"},
+                "status": {"type": "string", "enum": ["success"]},
+                "data": {"type": "object", "description": "Extracted fields"},
+                "fields_requested": {"type": "array", "items": {"type": "string"}},
+                "fields_extracted": {"type": "array", "items": {"type": "string"}},
+                "js_rendered": {"type": "boolean"},
+                "model": {"type": "string"},
+                "auth_method": {"type": "string", "enum": ["x402", "api_key"]}
             },
-            "required": ["input"]
+            "required": ["url", "status", "data", "fields_requested", "fields_extracted"]
         }
-    }
+    )
+)
 
 # FastAPI App
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.9",
+    version="0.7.10",
 )
-
-# Middleware: x402 auth check BEFORE Pydantic validation
-@app.middleware("http")
-async def x402_auth_middleware(request: Request, call_next):
-    """
-    Intercept POST /scrape and POST /extract to check auth before Pydantic validation.
-    Returns 402 immediately if no valid auth present, avoiding 422 validation errors.
-    """
-    if request.method == "POST" and request.url.path in ["/scrape", "/extract"]:
-        auth_method, api_key = await get_auth_method(request)
-        
-        # If no auth provided, return 402 before validation runs
-        if auth_method == "none":
-            if request.url.path == "/scrape":
-                return payment_required_response(
-                    SCRAPE_ACCEPTS,
-                    f"{BASE_URL}/scrape",
-                    "Scrape any public URL - clean LLM-ready markdown",
-                    "application/json",
-                    declare_discovery_extension_scrape()
-                )
-            else:
-                return payment_required_response(
-                    EXTRACT_ACCEPTS,
-                    f"{BASE_URL}/extract",
-                    "Schema-driven structured JSON extraction",
-                    "application/json",
-                    declare_discovery_extension_extract()
-                )
-        
-        # If x402 payment signature present, verify it
-        if auth_method == "x402":
-            payment_sig = request.headers.get("payment-signature") or request.headers.get("PAYMENT-SIGNATURE")
-            if payment_sig:
-                is_valid = await verify_x402_payment(payment_sig, request.url.path)
-                if not is_valid:
-                    return JSONResponse(
-                        status_code=402,
-                        content={"error": "Payment verification failed"}
-                    )
-                # Payment valid - add marker to request state
-                request.state.x402_payment_valid = True
-    
-    return await call_next(request)
-
-async def verify_x402_payment(payment_sig: str, path: str) -> bool:
-    """
-    Verify x402 payment signature against the appropriate facilitator.
-    Supports both xpay.sh and CDP facilitators.
-    """
-    try:
-        # Parse payment payload
-        payment_data = json.loads(base64.b64decode(payment_sig))
-        
-        # Determine which facilitator to use
-        accepted = payment_data.get("accepted", {})
-        facilitator_url = accepted.get("facilitator")
-        
-        if not facilitator_url:
-            # Default to xpay.sh if not specified
-            facilitator_url = XPAY_FACILITATOR
-        
-        # Build verification headers
-        headers = {"Content-Type": "application/json"}
-        if CDP_FACILITATOR in facilitator_url and CDP_API_KEY_ID and CDP_API_KEY_SECRET:
-            headers["CDP-API-KEY-ID"] = CDP_API_KEY_ID
-            headers["CDP-API-KEY-SECRET"] = CDP_API_KEY_SECRET
-        
-        # Build verification payload
-        # Facilitator expects paymentPayload and paymentRequirements
-        verify_payload = {
-            "paymentPayload": payment_data,
-            "paymentRequirements": {
-                "scheme": accepted.get("scheme", "exact"),
-                "network": accepted.get("network", "eip155:8453"),
-                "asset": accepted.get("asset", USDC_BASE),
-                "amount": accepted.get("amount", "10000"),
-                "payTo": accepted.get("payTo", PAY_TO),
-            }
-        }
-        
-        # Call facilitator verify endpoint
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{facilitator_url}/verify",
-                headers=headers,
-                json=verify_payload,
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                return result.get("isValid", False)
-            return False
-    except Exception as e:
-        print(f"Payment verification error: {e}")
-        return False
 
 # Models
 class ScrapeRequest(BaseModel):
@@ -544,20 +391,40 @@ async def get_auth_method(request: Request) -> tuple[str, Optional[str]]:
     return ("none", None)
 
 # x402 Payment Required Response Helper
-def payment_required_response(accepts, resource_url, description, mime_type, bazaar_extension):
-    """Return x402 v2 compliant 402 response with PAYMENT-REQUIRED header and resource object"""
+def payment_required_response(requirements: dict, resource: dict, bazaar_ext: dict):
+    """Return x402 v2 compliant 402 response with PAYMENT-REQUIRED header and bazaar extension"""
+    # Build accepts array with both facilitators
+    accepts = []
+    
+    # xpay.sh entry
+    accepts.append({
+        "scheme": requirements["scheme"],
+        "network": f"eip155:{requirements['network']}",
+        "asset": requirements["asset"],
+        "amount": requirements["amount"],
+        "payTo": requirements["payTo"],
+        "maxTimeoutSeconds": requirements["maxTimeoutSeconds"],
+        "facilitator": XPAY_FACILITATOR,
+    })
+    
+    # CDP entry (if credentials available)
+    if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
+        accepts.append({
+            "scheme": requirements["scheme"],
+            "network": f"eip155:{requirements['network']}",
+            "asset": requirements["asset"],
+            "amount": requirements["amount"],
+            "payTo": requirements["payTo"],
+            "maxTimeoutSeconds": requirements["maxTimeoutSeconds"],
+            "facilitator": CDP_FACILITATOR,
+        })
+    
     payload = {
         "x402Version": 2,
         "error": "Payment required",
-        "resource": {
-            "url": resource_url,
-            "description": description,
-            "mimeType": mime_type
-        },
+        "resource": resource,
         "accepts": accepts,
-        "extensions": {
-            "bazaar": bazaar_extension
-        }
+        "extensions": bazaar_ext
     }
     
     return JSONResponse(
@@ -565,6 +432,64 @@ def payment_required_response(accepts, resource_url, description, mime_type, baz
         headers={"PAYMENT-REQUIRED": base64.b64encode(json.dumps(payload).encode()).decode()},
         content={"error": "Payment required"}
     )
+
+# Middleware: x402 auth check BEFORE Pydantic validation
+@app.middleware("http")
+async def x402_auth_middleware(request: Request, call_next):
+    """
+    Intercept POST /scrape and POST /extract to check auth before Pydantic validation.
+    Returns 402 immediately if no valid auth present, avoiding 422 validation errors.
+    """
+    if request.method == "POST" and request.url.path in ["/scrape", "/extract"]:
+        auth_method, api_key = await get_auth_method(request)
+        
+        # If no auth provided, return 402 before validation runs
+        if auth_method == "none":
+            if request.url.path == "/scrape":
+                return payment_required_response(
+                    SCRAPE_REQUIREMENTS,
+                    SCRAPE_RESOURCE,
+                    SCRAPE_BAZAAR_EXT
+                )
+            else:
+                return payment_required_response(
+                    EXTRACT_REQUIREMENTS,
+                    EXTRACT_RESOURCE,
+                    EXTRACT_BAZAAR_EXT
+                )
+        
+        # If x402 payment signature present, verify it using x402ResourceServer
+        if auth_method == "x402":
+            payment_sig = request.headers.get("payment-signature") or request.headers.get("PAYMENT-SIGNATURE")
+            if payment_sig:
+                try:
+                    # Use x402ResourceServer to verify payment
+                    requirements = SCRAPE_REQUIREMENTS if request.url.path == "/scrape" else EXTRACT_REQUIREMENTS
+                    resource = SCRAPE_RESOURCE if request.url.path == "/scrape" else EXTRACT_RESOURCE
+                    
+                    # Parse and verify payment
+                    is_valid = await x402_server.verify_payment(
+                        payment_signature=payment_sig,
+                        requirements={**requirements, **resource}
+                    )
+                    
+                    if not is_valid:
+                        return JSONResponse(
+                            status_code=402,
+                            content={"error": "Payment verification failed"}
+                        )
+                    
+                    # Payment valid - add marker to request state
+                    request.state.x402_payment_valid = True
+                    request.state.x402_payment_sig = payment_sig
+                except Exception as e:
+                    print(f"Payment verification error: {e}")
+                    return JSONResponse(
+                        status_code=402,
+                        content={"error": f"Payment verification error: {str(e)}"}
+                    )
+    
+    return await call_next(request)
 
 # Endpoints
 @app.post("/scrape")
@@ -591,24 +516,25 @@ async def scrape(body: ScrapeRequest, request: Request):
     if getattr(request.state, "x402_payment_valid", False):
         result = await _scrape(body.url, body.js_render)
         result["auth_method"] = "x402"
+        
+        # Settle payment after successful service delivery
+        try:
+            payment_sig = getattr(request.state, "x402_payment_sig", None)
+            if payment_sig:
+                await x402_server.settle_payment(
+                    payment_signature=payment_sig,
+                    requirements={**SCRAPE_REQUIREMENTS, **SCRAPE_RESOURCE}
+                )
+        except Exception as e:
+            print(f"Payment settlement warning: {e}")
+        
         return result
     
     # No valid auth
-    return payment_required_response(
-        SCRAPE_ACCEPTS,
-        f"{BASE_URL}/scrape",
-        "Scrape any public URL - clean LLM-ready markdown",
-        "application/json",
-        declare_discovery_extension_scrape()
-    )
+    return payment_required_response(SCRAPE_REQUIREMENTS, SCRAPE_RESOURCE, SCRAPE_BAZAAR_EXT)
 
 @app.post("/extract")
 async def extract(body: ExtractRequest, request: Request):
-    if not body.fields:
-        raise HTTPException(status_code=422, detail="At least one field required")
-    if len(body.fields) > 20:
-        raise HTTPException(status_code=422, detail="Maximum 20 fields")
-    
     # Check for API key auth
     auth_method, api_key = await get_auth_method(request)
     
@@ -621,8 +547,8 @@ async def extract(body: ExtractRequest, request: Request):
         if key_info["credits_remaining"] < EXTRACT_CREDITS:
             raise HTTPException(status_code=402, detail={"error": "Insufficient credits", "credits_remaining": key_info["credits_remaining"], "credits_required": EXTRACT_CREDITS})
         
-        scrape_result = await _scrape(body.url, body.js_render)
-        result = await _extract_structured(scrape_result["content"], body.url, body.fields, scrape_result["js_rendered"])
+        markdown = (await _scrape(body.url, body.js_render))["content"]
+        result = await _extract_structured(markdown, body.url, body.fields, body.js_render)
         deduct_credits(api_key, EXTRACT_CREDITS, "/extract")
         result["auth_method"] = "api_key"
         result["credits_remaining"] = key_info["credits_remaining"] - EXTRACT_CREDITS
@@ -630,80 +556,101 @@ async def extract(body: ExtractRequest, request: Request):
     
     # Check for x402 payment (verified in middleware)
     if getattr(request.state, "x402_payment_valid", False):
-        scrape_result = await _scrape(body.url, body.js_render)
-        result = await _extract_structured(scrape_result["content"], body.url, body.fields, scrape_result["js_rendered"])
+        markdown = (await _scrape(body.url, body.js_render))["content"]
+        result = await _extract_structured(markdown, body.url, body.fields, body.js_render)
         result["auth_method"] = "x402"
+        
+        # Settle payment after successful service delivery
+        try:
+            payment_sig = getattr(request.state, "x402_payment_sig", None)
+            if payment_sig:
+                await x402_server.settle_payment(
+                    payment_signature=payment_sig,
+                    requirements={**EXTRACT_REQUIREMENTS, **EXTRACT_RESOURCE}
+                )
+        except Exception as e:
+            print(f"Payment settlement warning: {e}")
+        
         return result
     
     # No valid auth
-    return payment_required_response(
-        EXTRACT_ACCEPTS,
-        f"{BASE_URL}/extract",
-        "Schema-driven structured JSON extraction",
-        "application/json",
-        declare_discovery_extension_extract()
-    )
+    return payment_required_response(EXTRACT_REQUIREMENTS, EXTRACT_RESOURCE, EXTRACT_BAZAAR_EXT)
 
 @app.get("/health")
 async def health():
+    """Health check endpoint"""
+    facilitators = [XPAY_FACILITATOR]
+    if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
+        facilitators.append(CDP_FACILITATOR)
+    
     return {
         "status": "ok",
-        "version": "0.7.9",
-        "facilitators": [XPAY_FACILITATOR] + ([CDP_FACILITATOR] if CDP_API_KEY_ID else []),
+        "version": "0.7.10",
+        "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
 
-@app.get("/.well-known/x402")
-async def well_known_x402():
+@app.get("/")
+async def root():
+    """Root endpoint - redirects to docs"""
     return {
-        "version": "2",
-        "facilitators": [XPAY_FACILITATOR] + ([CDP_FACILITATOR] if CDP_API_KEY_ID else []),
-        "resources": [
-            {
-                "path": "/scrape",
-                "price": SCRAPE_PRICE,
-                "accepts": SCRAPE_ACCEPTS
-            },
-            {
-                "path": "/extract", 
-                "price": EXTRACT_PRICE,
-                "accepts": EXTRACT_ACCEPTS
-            }
-        ]
+        "service": "TerraDeed Scrape API",
+        "version": "0.7.10",
+        "documentation": "https://terradeed.co.uk/docs",
+        "endpoints": {
+            "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
+            "extract": {"path": "/extract", "method": "POST", "price": EXTRACT_PRICE, "auth": ["x402", "api_key"]},
+            "health": {"path": "/health", "method": "GET"}
+        }
     }
 
-# Admin endpoints
 @app.post("/admin/keys")
 async def create_key(request: CreateKeyRequest):
+    """Create a new API key (admin only)"""
     if request.admin_secret != ADMIN_SECRET:
         raise HTTPException(status_code=401, detail="Invalid admin secret")
     
-    new_key = f"td_sk_{secrets.token_hex(16)}"
-    key_hash = hash_key(new_key)
+    # Generate new key
+    key = f"td_sk_{secrets.token_urlsafe(32)}"
+    key_hash = hash_key(key)
+    key_prefix = get_key_prefix(key)
     timestamp = datetime.now(timezone.utc).isoformat()
     
     with get_db() as conn:
         conn.execute(
             "INSERT INTO api_keys (key_hash, key_prefix, credits_remaining, created_at) VALUES (?, ?, ?, ?)",
-            (key_hash, get_key_prefix(new_key), request.credits, timestamp)
+            (key_hash, key_prefix, request.credits, timestamp)
         )
         conn.commit()
     
-    return {"key": new_key, "credits": request.credits}
+    return {"api_key": key, "credits": request.credits, "created_at": timestamp}
 
-@app.get("/admin/keys")
-async def list_keys(admin_secret: str):
+@app.get("/admin/keys/{key_prefix}")
+async def get_key_status(key_prefix: str, request: Request):
+    """Get API key status (admin only)"""
+    admin_secret = request.headers.get("x-admin-secret", "")
     if admin_secret != ADMIN_SECRET:
         raise HTTPException(status_code=401, detail="Invalid admin secret")
     
     with get_db() as conn:
         cursor = conn.execute(
-            "SELECT key_prefix, credits_remaining, created_at, last_used_at, total_calls, is_active FROM api_keys ORDER BY created_at DESC"
+            "SELECT key_prefix, credits_remaining, total_calls, created_at, last_used_at, is_active FROM api_keys WHERE key_prefix = ?",
+            (key_prefix,)
         )
-        keys = [dict(row) for row in cursor.fetchall()]
-    
-    return {"keys": keys}
+        row = cursor.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Key not found")
+        
+        return {
+            "key_prefix": row["key_prefix"],
+            "credits_remaining": row["credits_remaining"],
+            "total_calls": row["total_calls"],
+            "created_at": row["created_at"],
+            "last_used_at": row["last_used_at"],
+            "is_active": bool(row["is_active"])
+        }
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
