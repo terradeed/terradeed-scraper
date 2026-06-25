@@ -290,7 +290,7 @@ EXTRACT_BAZAAR_EXT = declare_discovery_extension(
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.12",
+    version="0.7.13",
 )
 
 # Models
@@ -472,10 +472,12 @@ async def x402_auth_middleware(request: Request, call_next):
             payment_sig = request.headers.get("payment-signature") or request.headers.get("PAYMENT-SIGNATURE")
             if payment_sig:
                 try:
+                    import base64
                     from x402 import parse_payment_payload, PaymentRequirements
                     
-                    # Parse the payment signature into a PaymentPayload
-                    payload = parse_payment_payload(payment_sig.encode())
+                    # Decode base64 header, then parse into PaymentPayload
+                    decoded_bytes = base64.b64decode(payment_sig)
+                    payload = parse_payment_payload(decoded_bytes)
                     
                     # Build proper PaymentRequirements
                     req_dict = SCRAPE_REQUIREMENTS if request.url.path == "/scrape" else EXTRACT_REQUIREMENTS
@@ -604,7 +606,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.12",
+        "version": "0.7.13",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -614,7 +616,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.12",
+        "version": "0.7.13",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
