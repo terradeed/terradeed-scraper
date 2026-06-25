@@ -186,6 +186,22 @@ x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
 # Register bazaar extension for discovery
 x402_server.register_extension(bazaar_resource_server_extension)
 
+# Initialize synchronously at module load time
+import asyncio
+try:
+    x402_server.initialize()
+    print(f"x402 server initialized with {len(x402_server._facilitator_clients)} facilitators")
+except Exception as e:
+    print(f"Warning: x402 server initialization failed: {e}")
+    print("Server will continue without x402 payment verification")
+
+# FastAPI App
+app = FastAPI(
+    title="TerraDeed Scrape API",
+    description="Pay-per-use web scraping via x402 USDC or API keys",
+    version="0.7.19",
+)
+
 # Resource configurations for x402
 SCRAPE_RESOURCE = {
     "url": f"{BASE_URL}/scrape",
@@ -295,24 +311,6 @@ EXTRACT_BAZAAR_EXT = declare_discovery_extension(
         }
     )
 )
-
-# FastAPI App
-app = FastAPI(
-    title="TerraDeed Scrape API",
-    description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.18",
-)
-
-# Initialize x402 server on startup
-@app.on_event("startup")
-async def initialize_x402():
-    """Initialize x402 server on startup"""
-    try:
-        await x402_server.initialize()
-        print(f"x402 server initialized with {len(x402_server._facilitator_clients)} facilitators")
-    except Exception as e:
-        print(f"Warning: x402 server initialization failed: {e}")
-        print("Server will continue without x402 payment verification")
 
 # Models
 class ScrapeRequest(BaseModel):
