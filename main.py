@@ -21,7 +21,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # x402 imports
-from x402 import Network
 from x402.server import x402ResourceServer
 from x402.http import HTTPFacilitatorClient, FacilitatorConfig
 from x402.http.facilitator_client_base import AuthProvider, AuthHeaders
@@ -193,7 +192,7 @@ EXTRACT_RESOURCE = {
 # Payment requirements
 SCRAPE_REQUIREMENTS = {
     "scheme": "exact",
-    "network": Network.BASE,
+    "network": "eip155:8453",
     "asset": USDC_BASE,
     "amount": "10000",  # $0.01 in atomic units
     "payTo": PAY_TO,
@@ -202,7 +201,7 @@ SCRAPE_REQUIREMENTS = {
 
 EXTRACT_REQUIREMENTS = {
     "scheme": "exact",
-    "network": Network.BASE,
+    "network": "eip155:8453",
     "asset": USDC_BASE,
     "amount": "50000",  # $0.05 in atomic units
     "payTo": PAY_TO,
