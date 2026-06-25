@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # x402 imports
-from x402.server import x402ResourceServerSync
+from x402.server import x402ResourceServer
 from x402.http import HTTPFacilitatorClient, FacilitatorConfig
 from x402.http.facilitator_client_base import AuthProvider, AuthHeaders
 from x402.extensions.bazaar import (
@@ -170,11 +170,8 @@ if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
         auth_provider=cdp_auth
     )))
 
-# Create x402 resource server with all facilitators (sync version)
-x402_server = x402ResourceServerSync(facilitator_clients=facilitator_clients)
-
-# Initialize the server (required before verify_payment)
-x402_server.initialize()
+# Create x402 resource server (will initialize on startup)
+x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
 
 # Register bazaar extension for discovery
 x402_server.register_extension(bazaar_resource_server_extension)
@@ -293,8 +290,14 @@ EXTRACT_BAZAAR_EXT = declare_discovery_extension(
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.14",
+    version="0.7.15",
 )
+
+# Initialize x402 server on startup
+@app.on_event("startup")
+async def initialize_x402():
+    """Initialize x402 server on startup"""
+    await x402_server.initialize()
 
 # Models
 class ScrapeRequest(BaseModel):
@@ -494,8 +497,8 @@ async def x402_auth_middleware(request: Request, call_next):
                         extra={}
                     )
                     
-                    # Verify payment (sync server - no await needed)
-                    result = x402_server.verify_payment(payload, requirements)
+                    # Verify payment (async server)
+                    result = await x402_server.verify_payment(payload, requirements)
                     
                     if not result or not getattr(result, 'is_valid', False):
                         return JSONResponse(
@@ -609,7 +612,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.14",
+        "version": "0.7.15",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -619,7 +622,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.14",
+        "version": "0.7.15",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
