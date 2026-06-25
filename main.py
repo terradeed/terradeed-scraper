@@ -296,14 +296,19 @@ EXTRACT_BAZAAR_EXT = declare_discovery_extension(
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.16",
+    version="0.7.17",
 )
 
 # Initialize x402 server on startup
 @app.on_event("startup")
 async def initialize_x402():
     """Initialize x402 server on startup"""
-    await x402_server.initialize()
+    try:
+        await x402_server.initialize()
+        print(f"x402 server initialized with {len(x402_server._facilitator_clients)} facilitators")
+    except Exception as e:
+        print(f"Warning: x402 server initialization failed: {e}")
+        print("Server will continue without x402 payment verification")
 
 # Models
 class ScrapeRequest(BaseModel):
@@ -618,7 +623,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.16",
+        "version": "0.7.17",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -628,7 +633,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.16",
+        "version": "0.7.17",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
