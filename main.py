@@ -141,20 +141,22 @@ ensure_test_key()
 
 # CDP Auth Provider
 class CDPAuthProvider(AuthProvider):
-    """Auth provider for CDP facilitator"""
+    """Auth provider for CDP facilitator - provides auth for all endpoints"""
     def __init__(self, api_key_id: str, api_key_secret: str):
         self.api_key_id = api_key_id
         self.api_key_secret = api_key_secret
     
     def get_auth_headers(self):
-        # Return object with .supported property (x402 library expects this)
+        # CDP uses the same auth headers for all endpoints
         headers = {
             "CDP-API-KEY-ID": self.api_key_id,
             "CDP-API-KEY-SECRET": self.api_key_secret,
         }
-        # Create simple object with .supported attribute
+        # AuthHeaders dataclass expects verify, settle, and supported
         class AuthResult:
             def __init__(self, h):
+                self.verify = h
+                self.settle = h
                 self.supported = h
         return AuthResult(headers)
 
@@ -168,18 +170,19 @@ facilitator_clients = []
 # xpay.sh facilitator (always included)
 facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(url=XPAY_FACILITATOR)))
 
-# CDP facilitator DISABLED - credentials invalid (401 Unauthorized)
-# TODO: Fix CDP auth and re-enable
-# if CDP_API_KEY_ID and CDP_API_KEY_SECRET and CDP_API_KEY_ID != "test" and len(CDP_API_KEY_ID) > 10:
-#     try:
-#         cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
-#         facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
-#             url=CDP_FACILITATOR,
-#             auth_provider=cdp_auth
-#         )))
-#         print(f"CDP facilitator configured")
-#     except Exception as e:
-#         print(f"Warning: Could not configure CDP facilitator: {e}")
+# CDP facilitator - re-enabled with full auth
+if CDP_API_KEY_ID and CDP_API_KEY_SECRET and len(CDP_API_KEY_ID) > 10:
+    try:
+        cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
+        facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
+            url=CDP_FACILITATOR,
+            auth_provider=cdp_auth
+        )))
+        print(f"CDP facilitator configured")
+    except Exception as e:
+        print(f"Warning: Could not configure CDP facilitator: {e}")
+else:
+    print(f"CDP facilitator not configured - missing credentials")
 
 # Create x402 resource server (will initialize on startup)
 x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
@@ -200,7 +203,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.20",
+    version="0.7.21",
 )
 
 # Resource configurations for x402
