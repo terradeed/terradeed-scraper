@@ -499,7 +499,7 @@ async def x402_auth_middleware(request: Request, call_next):
                     decoded_bytes = base64.b64decode(payment_sig)
                     payload = parse_payment_payload(decoded_bytes)
                     
-                    # Build proper PaymentRequirements
+                    # Build proper PaymentRequirements with EIP-712 domain info
                     req_dict = SCRAPE_REQUIREMENTS if request.url.path == "/scrape" else EXTRACT_REQUIREMENTS
                     requirements = PaymentRequirements(
                         scheme=req_dict["scheme"],
@@ -508,7 +508,10 @@ async def x402_auth_middleware(request: Request, call_next):
                         amount=req_dict["amount"],
                         pay_to=req_dict["payTo"],
                         max_timeout_seconds=req_dict["maxTimeoutSeconds"],
-                        extra={}
+                        extra={
+                            "name": "USD Coin",  # EIP-712 domain name
+                            "version": "2",       # EIP-712 domain version
+                        }
                     )
                     
                     # Verify payment (async server)
