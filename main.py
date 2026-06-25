@@ -146,11 +146,17 @@ class CDPAuthProvider(AuthProvider):
         self.api_key_id = api_key_id
         self.api_key_secret = api_key_secret
     
-    def get_auth_headers(self) -> AuthHeaders:
-        return {
+    def get_auth_headers(self):
+        # Return object with .supported property (x402 library expects this)
+        headers = {
             "CDP-API-KEY-ID": self.api_key_id,
             "CDP-API-KEY-SECRET": self.api_key_secret,
         }
+        # Create simple object with .supported attribute
+        class AuthResult:
+            def __init__(self, h):
+                self.supported = h
+        return AuthResult(headers)
 
 # x402 Facilitator Configuration
 XPAY_FACILITATOR = "https://facilitator.xpay.sh"
@@ -290,7 +296,7 @@ EXTRACT_BAZAAR_EXT = declare_discovery_extension(
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.15",
+    version="0.7.16",
 )
 
 # Initialize x402 server on startup
@@ -612,7 +618,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.15",
+        "version": "0.7.16",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -622,7 +628,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.15",
+        "version": "0.7.16",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
