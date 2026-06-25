@@ -21,8 +21,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # x402 imports
-from x402 import FacilitatorClient, Network
+from x402 import Network
 from x402.server import x402ResourceServer
+from x402.http import HTTPFacilitatorClient, FacilitatorConfig
+from x402.http.facilitator_client_base import AuthProvider, AuthHeaders
 from x402.extensions.bazaar import (
     bazaar_resource_server_extension,
     declare_discovery_extension,
@@ -138,6 +140,19 @@ def ensure_test_key():
 
 ensure_test_key()
 
+# CDP Auth Provider
+class CDPAuthProvider(AuthProvider):
+    """Auth provider for CDP facilitator"""
+    def __init__(self, api_key_id: str, api_key_secret: str):
+        self.api_key_id = api_key_id
+        self.api_key_secret = api_key_secret
+    
+    def get_auth_headers(self) -> AuthHeaders:
+        return {
+            "CDP-API-KEY-ID": self.api_key_id,
+            "CDP-API-KEY-SECRET": self.api_key_secret,
+        }
+
 # x402 Facilitator Configuration
 XPAY_FACILITATOR = "https://facilitator.xpay.sh"
 CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402/facilitator"
@@ -146,20 +161,15 @@ CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402/facilitator"
 facilitator_clients = []
 
 # xpay.sh facilitator (always included)
-facilitator_clients.append(FacilitatorClient(url=XPAY_FACILITATOR))
+facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(url=XPAY_FACILITATOR)))
 
 # CDP facilitator (if credentials available)
 if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
-    def create_cdp_headers():
-        return {
-            "CDP-API-KEY-ID": CDP_API_KEY_ID,
-            "CDP-API-KEY-SECRET": CDP_API_KEY_SECRET,
-        }
-    
-    facilitator_clients.append(FacilitatorClient(
+    cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
+    facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
         url=CDP_FACILITATOR,
-        create_headers=create_cdp_headers
-    ))
+        auth_provider=cdp_auth
+    )))
 
 # Create x402 resource server with all facilitators
 x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
