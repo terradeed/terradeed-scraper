@@ -290,7 +290,7 @@ EXTRACT_BAZAAR_EXT = declare_discovery_extension(
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.10",
+    version="0.7.11",
 )
 
 # Models
@@ -408,7 +408,7 @@ def payment_required_response(requirements: dict, resource: dict, bazaar_ext: di
     # xpay.sh entry
     accepts.append({
         "scheme": requirements["scheme"],
-        "network": f"eip155:{requirements['network']}",
+        "network": requirements["network"],
         "asset": requirements["asset"],
         "amount": requirements["amount"],
         "payTo": requirements["payTo"],
@@ -420,7 +420,7 @@ def payment_required_response(requirements: dict, resource: dict, bazaar_ext: di
     if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
         accepts.append({
             "scheme": requirements["scheme"],
-            "network": f"eip155:{requirements['network']}",
+            "network": requirements["network"],
             "asset": requirements["asset"],
             "amount": requirements["amount"],
             "payTo": requirements["payTo"],
@@ -594,7 +594,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.10",
+        "version": "0.7.11",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -604,7 +604,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.10",
+        "version": "0.7.11",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
