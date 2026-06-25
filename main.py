@@ -514,10 +514,15 @@ async def x402_auth_middleware(request: Request, call_next):
                     # Verify payment (async server)
                     result = await x402_server.verify_payment(payload, requirements)
                     
+                    print(f"Payment verification result: {result}")
+                    print(f"Result is_valid: {getattr(result, 'is_valid', None)}")
+                    print(f"Result type: {type(result)}")
+                    
                     if not result or not getattr(result, 'is_valid', False):
+                        error_msg = getattr(result, 'error', 'Unknown verification error') if result else 'No result'
                         return JSONResponse(
                             status_code=402,
-                            content={"error": "Payment verification failed"}
+                            content={"error": f"Payment verification failed: {error_msg}"}
                         )
                     
                     # Payment valid - add marker to request state
