@@ -168,17 +168,18 @@ facilitator_clients = []
 # xpay.sh facilitator (always included)
 facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(url=XPAY_FACILITATOR)))
 
-# CDP facilitator (only if credentials look valid - not empty or 'test')
-if CDP_API_KEY_ID and CDP_API_KEY_SECRET and CDP_API_KEY_ID != "test" and len(CDP_API_KEY_ID) > 10:
-    try:
-        cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
-        facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
-            url=CDP_FACILITATOR,
-            auth_provider=cdp_auth
-        )))
-        print(f"CDP facilitator configured")
-    except Exception as e:
-        print(f"Warning: Could not configure CDP facilitator: {e}")
+# CDP facilitator DISABLED - credentials invalid (401 Unauthorized)
+# TODO: Fix CDP auth and re-enable
+# if CDP_API_KEY_ID and CDP_API_KEY_SECRET and CDP_API_KEY_ID != "test" and len(CDP_API_KEY_ID) > 10:
+#     try:
+#         cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
+#         facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
+#             url=CDP_FACILITATOR,
+#             auth_provider=cdp_auth
+#         )))
+#         print(f"CDP facilitator configured")
+#     except Exception as e:
+#         print(f"Warning: Could not configure CDP facilitator: {e}")
 
 # Create x402 resource server (will initialize on startup)
 x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
@@ -199,7 +200,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.19",
+    version="0.7.20",
 )
 
 # Resource configurations for x402
