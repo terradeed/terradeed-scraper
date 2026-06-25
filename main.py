@@ -168,13 +168,17 @@ facilitator_clients = []
 # xpay.sh facilitator (always included)
 facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(url=XPAY_FACILITATOR)))
 
-# CDP facilitator (if credentials available)
-if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
-    cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
-    facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
-        url=CDP_FACILITATOR,
-        auth_provider=cdp_auth
-    )))
+# CDP facilitator (only if credentials look valid - not empty or 'test')
+if CDP_API_KEY_ID and CDP_API_KEY_SECRET and CDP_API_KEY_ID != "test" and len(CDP_API_KEY_ID) > 10:
+    try:
+        cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
+        facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
+            url=CDP_FACILITATOR,
+            auth_provider=cdp_auth
+        )))
+        print(f"CDP facilitator configured")
+    except Exception as e:
+        print(f"Warning: Could not configure CDP facilitator: {e}")
 
 # Create x402 resource server (will initialize on startup)
 x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
@@ -296,7 +300,7 @@ EXTRACT_BAZAAR_EXT = declare_discovery_extension(
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.17",
+    version="0.7.18",
 )
 
 # Initialize x402 server on startup
@@ -623,7 +627,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.17",
+        "version": "0.7.18",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -633,7 +637,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.17",
+        "version": "0.7.18",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
