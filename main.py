@@ -290,7 +290,7 @@ EXTRACT_BAZAAR_EXT = declare_discovery_extension(
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.11",
+    version="0.7.12",
 )
 
 # Models
@@ -472,17 +472,27 @@ async def x402_auth_middleware(request: Request, call_next):
             payment_sig = request.headers.get("payment-signature") or request.headers.get("PAYMENT-SIGNATURE")
             if payment_sig:
                 try:
-                    # Use x402ResourceServer to verify payment
-                    requirements = SCRAPE_REQUIREMENTS if request.url.path == "/scrape" else EXTRACT_REQUIREMENTS
-                    resource = SCRAPE_RESOURCE if request.url.path == "/scrape" else EXTRACT_RESOURCE
+                    from x402 import parse_payment_payload, PaymentRequirements
                     
-                    # Parse and verify payment
-                    is_valid = await x402_server.verify_payment(
-                        payment_signature=payment_sig,
-                        requirements={**requirements, **resource}
+                    # Parse the payment signature into a PaymentPayload
+                    payload = parse_payment_payload(payment_sig.encode())
+                    
+                    # Build proper PaymentRequirements
+                    req_dict = SCRAPE_REQUIREMENTS if request.url.path == "/scrape" else EXTRACT_REQUIREMENTS
+                    requirements = PaymentRequirements(
+                        scheme=req_dict["scheme"],
+                        network=req_dict["network"],
+                        asset=req_dict["asset"],
+                        amount=req_dict["amount"],
+                        pay_to=req_dict["payTo"],
+                        max_timeout_seconds=req_dict["maxTimeoutSeconds"],
+                        extra={}
                     )
                     
-                    if not is_valid:
+                    # Verify payment
+                    result = await x402_server.verify_payment(payload, requirements)
+                    
+                    if not result or not getattr(result, 'is_valid', False):
                         return JSONResponse(
                             status_code=402,
                             content={"error": "Payment verification failed"}
@@ -594,7 +604,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.11",
+        "version": "0.7.12",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -604,7 +614,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.11",
+        "version": "0.7.12",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
