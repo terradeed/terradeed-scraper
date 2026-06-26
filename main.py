@@ -170,19 +170,20 @@ facilitator_clients = []
 # xpay.sh facilitator (always included)
 facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(url=XPAY_FACILITATOR)))
 
-# CDP facilitator - re-enabled with full auth
-if CDP_API_KEY_ID and CDP_API_KEY_SECRET and len(CDP_API_KEY_ID) > 10:
-    try:
-        cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
-        facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
-            url=CDP_FACILITATOR,
-            auth_provider=cdp_auth
-        )))
-        print(f"CDP facilitator configured")
-    except Exception as e:
-        print(f"Warning: Could not configure CDP facilitator: {e}")
-else:
-    print(f"CDP facilitator not configured - missing credentials")
+# CDP facilitator - DISABLED due to 401 auth error (debug separately)
+# if CDP_API_KEY_ID and CDP_API_KEY_SECRET and len(CDP_API_KEY_ID) > 10:
+#     try:
+#         cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
+#         facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
+#             url=CDP_FACILITATOR,
+#             auth_provider=cdp_auth
+#         )))
+#         print(f"CDP facilitator configured")
+#     except Exception as e:
+#         print(f"Warning: Could not configure CDP facilitator: {e}")
+# else:
+#     print(f"CDP facilitator not configured - missing credentials")
+print("CDP facilitator temporarily disabled - using xpay.sh only")
 
 # Create x402 resource server (will initialize on startup)
 x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
