@@ -190,20 +190,15 @@ x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
 # Register bazaar extension for discovery
 x402_server.register_extension(bazaar_resource_server_extension)
 
-# Initialize synchronously at module load time
-import asyncio
-try:
-    x402_server.initialize()
-    print(f"x402 server initialized with {len(x402_server._facilitator_clients)} facilitators")
-except Exception as e:
-    print(f"Warning: x402 server initialization failed: {e}")
-    print("Server will continue without x402 payment verification")
+# Initialize synchronously at module load time - REQUIRED before any payment verification
+x402_server.initialize()
+print(f"x402 server initialized with {len(x402_server._facilitator_clients)} facilitators")
 
 # FastAPI App
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.21",
+    version="0.7.22",
 )
 
 # Resource configurations for x402
@@ -638,7 +633,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.21",
+        "version": "0.7.22",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -648,7 +643,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.21",
+        "version": "0.7.22",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
