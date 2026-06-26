@@ -638,7 +638,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.18",
+        "version": "0.7.21",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -648,7 +648,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.18",
+        "version": "0.7.21",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
