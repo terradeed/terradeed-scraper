@@ -191,8 +191,14 @@ x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
 x402_server.register_extension(bazaar_resource_server_extension)
 
 # Initialize synchronously at module load time - REQUIRED before any payment verification
-x402_server.initialize()
-print(f"x402 server initialized with {len(x402_server._facilitator_clients)} facilitators")
+try:
+    x402_server.initialize()
+    print(f"✓ x402 server initialized with {len(x402_server._facilitator_clients)} facilitators")
+except Exception as e:
+    print(f"✗ x402 server initialization FAILED: {e}")
+    import traceback
+    traceback.print_exc()
+    raise RuntimeError(f"x402 initialization failed: {e}") from e
 
 # FastAPI App
 app = FastAPI(
