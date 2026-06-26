@@ -205,7 +205,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.23",
+    version="0.7.24",
 )
 
 # Resource configurations for x402
@@ -537,6 +537,8 @@ async def x402_auth_middleware(request: Request, call_next):
                     # Payment valid - add marker to request state
                     request.state.x402_payment_valid = True
                     request.state.x402_payment_sig = payment_sig
+                    request.state.x402_payload = payload
+                    request.state.x402_requirements = requirements
                 except Exception as e:
                     print(f"Payment verification error: {e}")
                     return JSONResponse(
@@ -574,11 +576,12 @@ async def scrape(body: ScrapeRequest, request: Request):
         
         # Settle payment after successful service delivery
         try:
-            payment_sig = getattr(request.state, "x402_payment_sig", None)
-            if payment_sig:
+            payload = getattr(request.state, "x402_payload", None)
+            requirements = getattr(request.state, "x402_requirements", None)
+            if payload and requirements:
                 settle_result = await x402_server.settle_payment(
-                    payment_signature=payment_sig,
-                    requirements={**SCRAPE_REQUIREMENTS, **SCRAPE_RESOURCE}
+                    payload=payload,
+                    requirements=requirements
                 )
                 # DEBUG_SETTLE: Log full settle response
                 if os.environ.get("DEBUG_SETTLE"):
@@ -623,11 +626,12 @@ async def extract(body: ExtractRequest, request: Request):
         
         # Settle payment after successful service delivery
         try:
-            payment_sig = getattr(request.state, "x402_payment_sig", None)
-            if payment_sig:
+            payload = getattr(request.state, "x402_payload", None)
+            requirements = getattr(request.state, "x402_requirements", None)
+            if payload and requirements:
                 settle_result = await x402_server.settle_payment(
-                    payment_signature=payment_sig,
-                    requirements={**EXTRACT_REQUIREMENTS, **EXTRACT_RESOURCE}
+                    payload=payload,
+                    requirements=requirements
                 )
                 # DEBUG_SETTLE: Log full settle response
                 if os.environ.get("DEBUG_SETTLE"):
@@ -652,7 +656,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.23",
+        "version": "0.7.24",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -662,7 +666,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.23",
+        "version": "0.7.24",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
