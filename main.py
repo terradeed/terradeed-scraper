@@ -147,18 +147,11 @@ class CDPAuthProvider(AuthProvider):
         self.api_key_secret = api_key_secret
     
     def get_auth_headers(self):
-        # CDP uses the same auth headers for all endpoints
         headers = {
             "CDP-API-KEY-ID": self.api_key_id,
             "CDP-API-KEY-SECRET": self.api_key_secret,
         }
-        # AuthHeaders dataclass expects verify, settle, and supported
-        class AuthResult:
-            def __init__(self, h):
-                self.verify = h
-                self.settle = h
-                self.supported = h
-        return AuthResult(headers)
+        return AuthHeaders(verify=headers, settle=headers, supported=headers)
 
 # x402 Facilitator Configuration
 XPAY_FACILITATOR = "https://facilitator.xpay.sh"
@@ -170,20 +163,19 @@ facilitator_clients = []
 # xpay.sh facilitator (always included)
 facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(url=XPAY_FACILITATOR)))
 
-# CDP facilitator - DISABLED due to 401 auth error (debug separately)
-# if CDP_API_KEY_ID and CDP_API_KEY_SECRET and len(CDP_API_KEY_ID) > 10:
-#     try:
-#         cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
-#         facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
-#             url=CDP_FACILITATOR,
-#             auth_provider=cdp_auth
-#         )))
-#         print(f"CDP facilitator configured")
-#     except Exception as e:
-#         print(f"Warning: Could not configure CDP facilitator: {e}")
-# else:
-#     print(f"CDP facilitator not configured - missing credentials")
-print("CDP facilitator temporarily disabled - using xpay.sh only")
+# CDP facilitator (enabled when credentials available)
+if CDP_API_KEY_ID and CDP_API_KEY_SECRET and len(CDP_API_KEY_ID) > 10:
+    try:
+        cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
+        facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
+            url=CDP_FACILITATOR,
+            auth_provider=cdp_auth
+        )))
+        print("CDP facilitator configured")
+    except Exception as e:
+        print(f"Warning: Could not configure CDP facilitator: {e}")
+else:
+    print("CDP facilitator not configured - missing credentials")
 
 # Create x402 resource server (will initialize on startup)
 x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
