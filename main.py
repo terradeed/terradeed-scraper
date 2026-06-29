@@ -205,7 +205,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.24",
+    version="0.7.25",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -652,7 +652,7 @@ async def extract(body: ExtractRequest, request: Request):
     # No valid auth
     return payment_required_response(EXTRACT_REQUIREMENTS, EXTRACT_RESOURCE, EXTRACT_BAZAAR_EXT)
 
-@app.get("/health", security=[])
+@app.get("/health")
 async def health():
     """Health check endpoint"""
     facilitators = [XPAY_FACILITATOR]
@@ -666,7 +666,7 @@ async def health():
         "auth_methods": ["x402", "api_key"]
     }
 
-@app.get("/", security=[])
+@app.get("/")
 async def root():
     """Root endpoint - redirects to docs"""
     return {
@@ -680,7 +680,7 @@ async def root():
         }
     }
 
-@app.post("/admin/keys", security=[])
+@app.post("/admin/keys")
 async def create_key(request: CreateKeyRequest):
     """Create a new API key (admin only)"""
     if request.admin_secret != ADMIN_SECRET:
@@ -701,7 +701,7 @@ async def create_key(request: CreateKeyRequest):
     
     return {"api_key": key, "credits": request.credits, "created_at": timestamp}
 
-@app.get("/admin/keys/{key_prefix}", security=[])
+@app.get("/admin/keys/{key_prefix}")
 async def get_key_status(key_prefix: str, request: Request):
     """Get API key status (admin only)"""
     admin_secret = request.headers.get("x-admin-secret", "")
