@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.7.28 - CDP URL path fix
+Version 0.7.29 - OpenAPI security exclusion fix
 """
 
 import base64
@@ -18,6 +18,7 @@ import httpx
 import trafilatura
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
 
 # x402 imports
@@ -251,7 +252,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.28",
+    version="0.7.29",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -707,7 +708,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.28",
+        "version": "0.7.29",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -717,7 +718,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.24",
+        "version": "0.7.29",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
@@ -772,6 +773,28 @@ async def get_key_status(key_prefix: str, request: Request):
             "last_used_at": row["last_used_at"],
             "is_active": bool(row["is_active"])
         }
+
+# Override OpenAPI schema to mark free endpoints as requiring no security
+# (avoids x402scan probing them and getting 405 errors)
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    free_paths = ["/health", "/", "/admin/keys", "/admin/keys/{key_prefix}"]
+    for path in free_paths:
+        if path in openapi_schema.get("paths", {}):
+            for method in openapi_schema["paths"][path]:
+                if method in ("get", "post", "put", "delete", "patch"):
+                    openapi_schema["paths"][path][method]["security"] = []
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 if __name__ == "__main__":
     import uvicorn
