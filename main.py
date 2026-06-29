@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.7.27 - CDP facilitator precedence fix
+Version 0.7.28 - CDP URL path fix
 """
 
 import base64
@@ -161,9 +161,9 @@ class CDPAuthProvider(AuthProvider):
 
     def get_auth_headers(self):
         return AuthHeaders(
-            verify=self._make_headers("POST", "/platform/v2/x402/facilitator/verify"),
-            settle=self._make_headers("POST", "/platform/v2/x402/facilitator/settle"),
-            supported=self._make_headers("GET", "/platform/v2/x402/facilitator/supported"),
+            verify=self._make_headers("POST", "/platform/v2/x402/verify"),
+            settle=self._make_headers("POST", "/platform/v2/x402/settle"),
+            supported=self._make_headers("GET", "/platform/v2/x402/supported"),
         )
 
 # CDP Facilitator Wrapper — bypasses missing /supported endpoint
@@ -208,7 +208,7 @@ class CDPFacilitatorWrapper:
 
 # x402 Facilitator Configuration
 XPAY_FACILITATOR = "https://facilitator.xpay.sh"
-CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402/facilitator"
+CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402"
 
 # Create facilitator clients
 facilitator_clients = []
@@ -251,7 +251,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.27",
+    version="0.7.28",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -707,7 +707,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.27",
+        "version": "0.7.28",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
