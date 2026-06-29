@@ -661,7 +661,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.24",
+        "version": "0.7.25",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
