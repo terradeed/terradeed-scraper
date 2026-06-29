@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.7.26 - CDP Facilitator Wrapper (bypasses missing /supported endpoint)
+Version 0.7.27 - CDP facilitator precedence fix
 """
 
 import base64
@@ -213,10 +213,7 @@ CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402/facilitator"
 # Create facilitator clients
 facilitator_clients = []
 
-# xpay.sh facilitator (always included)
-facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(url=XPAY_FACILITATOR)))
-
-# CDP facilitator (enabled when credentials available)
+# CDP facilitator FIRST (takes precedence for Bazaar indexing)
 if CDP_API_KEY_ID and CDP_API_KEY_SECRET and len(CDP_API_KEY_ID) > 10:
     try:
         cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
@@ -230,6 +227,9 @@ if CDP_API_KEY_ID and CDP_API_KEY_SECRET and len(CDP_API_KEY_ID) > 10:
         print(f"Warning: Could not configure CDP facilitator: {e}")
 else:
     print("CDP facilitator not configured - missing credentials")
+
+# xpay.sh facilitator (fallback)
+facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(url=XPAY_FACILITATOR)))
 
 # Create x402 resource server (will initialize on startup)
 x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
@@ -251,7 +251,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.26",
+    version="0.7.27",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -707,7 +707,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.26",
+        "version": "0.7.27",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
