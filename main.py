@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.7.10 - CDP Bazaar Integration with x402 Resource Server
+Version 0.7.26 - CDP Facilitator Wrapper (bypasses missing /supported endpoint)
 """
 
 import base64
@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from x402.server import x402ResourceServer
 from x402.http import HTTPFacilitatorClient, FacilitatorConfig
 from x402.http.facilitator_client_base import AuthProvider, AuthHeaders
+from x402.schemas import SupportedResponse, SupportedKind
 from x402.extensions.bazaar import (
     bazaar_resource_server_extension,
     declare_discovery_extension,
@@ -139,19 +140,71 @@ def ensure_test_key():
 
 ensure_test_key()
 
-# CDP Auth Provider
+# CDP Auth Provider — generates JWT Bearer tokens per-endpoint
 class CDPAuthProvider(AuthProvider):
-    """Auth provider for CDP facilitator - provides auth for all endpoints"""
+    """Auth provider for CDP facilitator using JWT Bearer tokens"""
     def __init__(self, api_key_id: str, api_key_secret: str):
         self.api_key_id = api_key_id
         self.api_key_secret = api_key_secret
-    
+
+    def _make_headers(self, method: str, path: str) -> dict[str, str]:
+        from cdp.auth import generate_jwt
+        from cdp.auth.utils.jwt import JwtOptions
+        token = generate_jwt(JwtOptions(
+            api_key_id=self.api_key_id,
+            api_key_secret=self.api_key_secret,
+            request_method=method,
+            request_host="https://api.cdp.coinbase.com",
+            request_path=path,
+        ))
+        return {"Authorization": f"Bearer {token}"}
+
     def get_auth_headers(self):
-        headers = {
-            "CDP-API-KEY-ID": self.api_key_id,
-            "CDP-API-KEY-SECRET": self.api_key_secret,
-        }
-        return AuthHeaders(verify=headers, settle=headers, supported=headers)
+        return AuthHeaders(
+            verify=self._make_headers("POST", "/platform/v2/x402/facilitator/verify"),
+            settle=self._make_headers("POST", "/platform/v2/x402/facilitator/settle"),
+            supported=self._make_headers("GET", "/platform/v2/x402/facilitator/supported"),
+        )
+
+# CDP Facilitator Wrapper — bypasses missing /supported endpoint
+class CDPFacilitatorWrapper:
+    """Wraps HTTPFacilitatorClient for CDP, hardcoding get_supported() since CDP has no /supported endpoint."""
+    def __init__(self, http_client: HTTPFacilitatorClient):
+        self._client = http_client
+
+    def get_supported(self) -> SupportedResponse:
+        # Hardcode what CDP supports: exact scheme on Base mainnet
+        return SupportedResponse(
+            kinds=[
+                SupportedKind(x402_version=1, scheme="exact", network="base", extra=None),
+                SupportedKind(x402_version=2, scheme="exact", network="eip155:8453", extra=None),
+            ],
+            extensions=[],
+            signers={},
+        )
+
+    async def verify(self, payload, requirements):
+        return await self._client.verify(payload, requirements)
+
+    async def settle(self, payload, requirements):
+        return await self._client.settle(payload, requirements)
+
+    async def verify_from_bytes(self, payload_bytes, requirements_bytes):
+        return await self._client.verify_from_bytes(payload_bytes, requirements_bytes)
+
+    async def settle_from_bytes(self, payload_bytes, requirements_bytes):
+        return await self._client.settle_from_bytes(payload_bytes, requirements_bytes)
+
+    async def aclose(self):
+        await self._client.aclose()
+
+    @property
+    def identifier(self):
+        return self._client.identifier
+
+    @property
+    def url(self):
+        return self._client.url
 
 # x402 Facilitator Configuration
 XPAY_FACILITATOR = "https://facilitator.xpay.sh"
@@ -167,10 +220,11 @@ facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(url=XPAY_FACI
 if CDP_API_KEY_ID and CDP_API_KEY_SECRET and len(CDP_API_KEY_ID) > 10:
     try:
         cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
-        facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
+        cdp_http = HTTPFacilitatorClient(FacilitatorConfig(
             url=CDP_FACILITATOR,
             auth_provider=cdp_auth
-        )))
+        ))
+        facilitator_clients.append(CDPFacilitatorWrapper(cdp_http))
         print("CDP facilitator configured")
     except Exception as e:
         print(f"Warning: Could not configure CDP facilitator: {e}")
@@ -197,7 +251,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.25",
+    version="0.7.26",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -653,7 +707,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.25",
+        "version": "0.7.26",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
