@@ -252,7 +252,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.29",
+    version="0.7.30",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -269,7 +269,7 @@ SCRAPE_RESOURCE = {
 
 EXTRACT_RESOURCE = {
     "url": f"{BASE_URL}/extract",
-    "description": "Schema-driven structured JSON extraction",
+    "description": "Extract structured data from any URL using AI reasoning. Describe the fields you need, get Claude-validated JSON back. Built for vertical data: property listings, recruitment profiles, company intel — not commodity scraping.",
     "mimeType": "application/json",
 }
 
