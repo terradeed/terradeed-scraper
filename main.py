@@ -170,6 +170,43 @@ ensure_test_key()
 logging.basicConfig(level=logging.INFO)          # no-op if already configured
 logging.getLogger("x402").setLevel(logging.INFO)
 
+class CDPFacilitatorWrapper:
+    """Wraps HTTPFacilitatorClient for CDP, hardcoding get_supported() since CDP has no /supported endpoint."""
+    def __init__(self, http_client: HTTPFacilitatorClient):
+        self._client = http_client
+
+    def get_supported(self) -> SupportedResponse:
+        return SupportedResponse(
+            kinds=[
+                SupportedKind(x402_version=1, scheme="exact", network="base", extra=None),
+                SupportedKind(x402_version=2, scheme="exact", network="eip155:8453", extra=None),
+            ],
+            extensions=[],
+            signers={},
+        )
+
+    async def verify(self, payload, requirements):
+        return await self._client.verify(payload, requirements)
+
+    async def settle(self, payload, requirements):
+        return await self._client.settle(payload, requirements)
+
+    async def verify_from_bytes(self, payload_bytes, requirements_bytes):
+        return await self._client.verify_from_bytes(payload_bytes, requirements_bytes)
+
+    async def settle_from_bytes(self, payload_bytes, requirements_bytes):
+        return await self._client.settle_from_bytes(payload_bytes, requirements_bytes)
+
+    async def aclose(self):
+        await self._client.aclose()
+
+    @property
+    def identifier(self):
+        return self._client.identifier
+
+    @property
+    def url(self):
+        return self._client.url
 
 class CDPAuthProvider(AuthProvider):
     """Auth provider for CDP facilitator using JWT Bearer tokens.
