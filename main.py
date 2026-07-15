@@ -335,7 +335,6 @@ EXTRACT_REQUIREMENTS = {
 
 # Bazaar discovery extensions using declare_discovery_extension
 SCRAPE_BAZAAR_EXT = declare_discovery_extension(
-    method="POST",
     input={"url": "https://example.com", "js_render": False},
     input_schema={
         "type": "object",
@@ -373,7 +372,6 @@ SCRAPE_BAZAAR_EXT = declare_discovery_extension(
 )
 
 EXTRACT_BAZAAR_EXT = declare_discovery_extension(
-    method="POST",
     input={"url": "https://example.com/product", "fields": ["name", "price"], "js_render": False},
     input_schema={
         "type": "object",
