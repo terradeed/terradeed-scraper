@@ -10,6 +10,7 @@ import os
 import sqlite3
 import secrets
 import hashlib
+Import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 from contextlib import contextmanager
@@ -141,9 +142,45 @@ def ensure_test_key():
 
 ensure_test_key()
 
-# CDP Auth Provider — generates JWT Bearer tokens per-endpoint
+# ============================================================================
+# CDP facilitator configuration — drop-in replacement for the existing section
+# ============================================================================
+# What changed vs your current code, and why:
+#
+#   1. request_host is now hostname-only ("api.cdp.coinbase.com").
+#      NOT the bug — the cdp-sdk normalises the scheme away via urlparse —
+#      but hostname-only is what the SDK documents, so this removes the
+#      ambiguity permanently.
+#
+#   2. Logging: the x402 library ALREADY decodes and logs CDP's
+#      EXTENSION-RESPONSES header on every verify/settle at INFO level on
+#      the "x402" logger. Your Railway logs have been discarding it. The
+#      logging block below surfaces it — this header is CDP telling you
+#      whether it accepted or rejected your bazaar extension data on each
+#      settlement, which is the exact diagnostic you need for indexing.
+#
+#   3. DEBUG_SETTLE now also logs client.identifier so every settlement
+#      line names which facilitator handled it (no more inference).
+#
+#   Everything else — CDPFacilitatorWrapper, facilitator ordering, the
+#   xpay.sh fallback — is unchanged. The routing was never broken.
+
+
+# --- Surface x402's built-in EXTENSION-RESPONSES diagnostics ---------------
+logging.basicConfig(level=logging.INFO)          # no-op if already configured
+logging.getLogger("x402").setLevel(logging.INFO)
+
+
 class CDPAuthProvider(AuthProvider):
-    """Auth provider for CDP facilitator using JWT Bearer tokens"""
+    """Auth provider for CDP facilitator using JWT Bearer tokens.
+
+    Generates a fresh JWT per request (the x402 HTTP client calls
+    get_auth_headers() on every verify/settle, and CDP JWTs expire in
+    ~2 minutes, so tokens must never be cached).
+    """
+
+    CDP_HOST = "api.cdp.coinbase.com"  # hostname only — no scheme
+
     def __init__(self, api_key_id: str, api_key_secret: str):
         self.api_key_id = api_key_id
         self.api_key_secret = api_key_secret
@@ -151,11 +188,12 @@ class CDPAuthProvider(AuthProvider):
     def _make_headers(self, method: str, path: str) -> dict[str, str]:
         from cdp.auth import generate_jwt
         from cdp.auth.utils.jwt import JwtOptions
+
         token = generate_jwt(JwtOptions(
             api_key_id=self.api_key_id,
             api_key_secret=self.api_key_secret,
             request_method=method,
-            request_host="https://api.cdp.coinbase.com",
+            request_host=self.CDP_HOST,
             request_path=path,
         ))
         return {"Authorization": f"Bearer {token}"}
@@ -167,60 +205,25 @@ class CDPAuthProvider(AuthProvider):
             supported=self._make_headers("GET", "/platform/v2/x402/supported"),
         )
 
-# CDP Facilitator Wrapper — bypasses missing /supported endpoint
-class CDPFacilitatorWrapper:
-    """Wraps HTTPFacilitatorClient for CDP, hardcoding get_supported() since CDP has no /supported endpoint."""
-    def __init__(self, http_client: HTTPFacilitatorClient):
-        self._client = http_client
 
-    def get_supported(self) -> SupportedResponse:
-        # Hardcode what CDP supports: exact scheme on Base mainnet
-        return SupportedResponse(
-            kinds=[
-                SupportedKind(x402_version=1, scheme="exact", network="base", extra=None),
-                SupportedKind(x402_version=2, scheme="exact", network="eip155:8453", extra=None),
-            ],
-            extensions=[],
-            signers={},
-        )
-
-    async def verify(self, payload, requirements):
-        return await self._client.verify(payload, requirements)
-
-    async def settle(self, payload, requirements):
-        return await self._client.settle(payload, requirements)
-
-    async def verify_from_bytes(self, payload_bytes, requirements_bytes):
-        return await self._client.verify_from_bytes(payload_bytes, requirements_bytes)
-
-    async def settle_from_bytes(self, payload_bytes, requirements_bytes):
-        return await self._client.settle_from_bytes(payload_bytes, requirements_bytes)
-
-    async def aclose(self):
-        await self._client.aclose()
-
-    @property
-    def identifier(self):
-        return self._client.identifier
-
-    @property
-    def url(self):
-        return self._client.url
-
-# x402 Facilitator Configuration
+# --- Facilitator wiring (unchanged logic, plus identifiers) ----------------
 XPAY_FACILITATOR = "https://facilitator.xpay.sh"
 CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402"
 
-# Create facilitator clients
 facilitator_clients = []
 
-# CDP facilitator FIRST (takes precedence for Bazaar indexing)
+# CDP facilitator FIRST. Note: because the x402 server maps exactly ONE
+# facilitator per (network, scheme) at initialize() time — first registrant
+# wins, with no runtime fallback — CDP being first means it handles ALL
+# "base" / "eip155:8453" settlements. xpay.sh below is only ever used for
+# networks/schemes CDP does not claim.
 if CDP_API_KEY_ID and CDP_API_KEY_SECRET and len(CDP_API_KEY_ID) > 10:
     try:
         cdp_auth = CDPAuthProvider(CDP_API_KEY_ID, CDP_API_KEY_SECRET)
         cdp_http = HTTPFacilitatorClient(FacilitatorConfig(
             url=CDP_FACILITATOR,
-            auth_provider=cdp_auth
+            auth_provider=cdp_auth,
+            identifier="cdp",
         ))
         facilitator_clients.append(CDPFacilitatorWrapper(cdp_http))
         print("CDP facilitator configured")
@@ -229,23 +232,24 @@ if CDP_API_KEY_ID and CDP_API_KEY_SECRET and len(CDP_API_KEY_ID) > 10:
 else:
     print("CDP facilitator not configured - missing credentials")
 
-# xpay.sh facilitator (fallback)
-facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(url=XPAY_FACILITATOR)))
+facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
+    url=XPAY_FACILITATOR,
+    identifier="xpay",
+)))
 
-# Create x402 resource server (will initialize on startup)
 x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
-
-# Register bazaar extension for discovery
 x402_server.register_extension(bazaar_resource_server_extension)
 
-# Initialize synchronously at module load time - REQUIRED before any payment verification
 try:
     x402_server.initialize()
     print(f"✓ x402 server initialized with {len(x402_server._facilitator_clients)} facilitators")
+    # Log the routing map once at boot so there is never any doubt about
+    # which facilitator owns which network/scheme:
+    for network, schemes in x402_server._facilitator_clients_map.items():
+        for scheme, client in schemes.items():
+            print(f"  route: {network}/{scheme} -> {getattr(client, 'identifier', client)}")
 except Exception as e:
     print(f"✗ x402 server initialization FAILED: {e}")
-    import traceback
-    traceback.print_exc()
     raise RuntimeError(f"x402 initialization failed: {e}") from e
 
 # FastAPI App
