@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.7.29 - OpenAPI security exclusion fix
+Version 0.7.31 - Manual bazaar extension with method POST for CDP indexing
 """
 
 import base64
@@ -29,8 +29,6 @@ from x402.http.facilitator_client_base import AuthProvider, AuthHeaders
 from x402.schemas import SupportedResponse, SupportedKind
 from x402.extensions.bazaar import (
     bazaar_resource_server_extension,
-    declare_discovery_extension,
-    OutputConfig,
 )
 
 # Config
@@ -293,7 +291,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.30",
+    version="0.7.31",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -333,83 +331,150 @@ EXTRACT_REQUIREMENTS = {
     "maxTimeoutSeconds": 300,
 }
 
-# Bazaar discovery extensions using declare_discovery_extension
-SCRAPE_BAZAAR_EXT = declare_discovery_extension(
-    input={"url": "https://example.com", "js_render": False},
-    input_schema={
-        "type": "object",
-        "properties": {
-            "url": {"type": "string", "format": "uri", "description": "URL to scrape"},
-            "js_render": {"type": "boolean", "description": "Enable JavaScript rendering", "default": False}
-        },
-        "required": ["url"]
-    },
-    body_type="json",
-    output=OutputConfig(
-        example={
-            "content": "## Example Domain\n\nThis domain is for use in illustrative examples.",
-            "url": "https://example.com",
-            "status": "success",
-            "word_count": 28,
-            "title": "Example Domain",
-            "js_rendered": False,
-            "auth_method": "x402"
-        },
-        schema={
-            "type": "object",
-            "properties": {
-                "content": {"type": "string", "description": "Extracted markdown content"},
-                "url": {"type": "string", "format": "uri"},
-                "status": {"type": "string", "enum": ["success"]},
-                "word_count": {"type": "integer"},
-                "title": {"type": ["string", "null"]},
-                "js_rendered": {"type": "boolean"},
-                "auth_method": {"type": "string", "enum": ["x402", "api_key"]}
-            },
-            "required": ["content", "url", "status"]
-        }
-    )
-)
+# Bazaar discovery extensions — manual declaration with method: POST
+# The declare_discovery_extension() helper has NO method parameter by design.
+# Runtime enrichment injects it from transport_context.method, but that path
+# doesn't fire in our custom FastAPI integration. Baking "method": "POST"
+# manually is safe (BodyInput declares method as optional with extra="allow").
 
-EXTRACT_BAZAAR_EXT = declare_discovery_extension(
-    input={"url": "https://example.com/product", "fields": ["name", "price"], "js_render": False},
-    input_schema={
-        "type": "object",
-        "properties": {
-            "url": {"type": "string", "format": "uri", "description": "URL to extract data from"},
-            "fields": {"type": "array", "items": {"type": "string"}, "description": "List of field names to extract"},
-            "js_render": {"type": "boolean", "description": "Enable JavaScript rendering", "default": False}
+SCRAPE_BAZAAR_EXT = {
+    "bazaar": {
+        "info": {
+            "input": {
+                "type": "http",
+                "method": "POST",
+                "bodyType": "json",
+                "body": {
+                    "url": "https://example.com",
+                    "js_render": False,
+                },
+            },
+            "output": {
+                "type": "json",
+                "example": {
+                    "content": "## Example Domain\n\nThis domain is for use in illustrative examples.",
+                    "url": "https://example.com",
+                    "status": "success",
+                    "word_count": 28,
+                    "title": "Example Domain",
+                    "js_rendered": False,
+                    "auth_method": "x402",
+                },
+            },
         },
-        "required": ["url", "fields"]
-    },
-    body_type="json",
-    output=OutputConfig(
-        example={
-            "url": "https://example.com/product",
-            "status": "success",
-            "data": {"name": "Example Product", "price": "$29.99"},
-            "fields_requested": ["name", "price"],
-            "fields_extracted": ["name", "price"],
-            "js_rendered": False,
-            "model": EXTRACT_MODEL,
-            "auth_method": "x402"
-        },
-        schema={
+        "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "properties": {
-                "url": {"type": "string", "format": "uri"},
-                "status": {"type": "string", "enum": ["success"]},
-                "data": {"type": "object", "description": "Extracted fields"},
-                "fields_requested": {"type": "array", "items": {"type": "string"}},
-                "fields_extracted": {"type": "array", "items": {"type": "string"}},
-                "js_rendered": {"type": "boolean"},
-                "model": {"type": "string"},
-                "auth_method": {"type": "string", "enum": ["x402", "api_key"]}
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "http"},
+                        "method": {"type": "string", "enum": ["POST", "PUT", "PATCH"]},
+                        "bodyType": {"type": "string", "enum": ["json", "form-data", "text"]},
+                        "body": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string", "format": "uri"},
+                                "js_render": {"type": "boolean", "default": False},
+                            },
+                            "required": ["url"],
+                        },
+                    },
+                    "required": ["type", "method", "bodyType", "body"],
+                    "additionalProperties": False,
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "example": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string"},
+                                "url": {"type": "string", "format": "uri"},
+                                "status": {"type": "string", "enum": ["success"]},
+                                "word_count": {"type": "integer"},
+                                "title": {"type": ["string", "null"]},
+                                "js_rendered": {"type": "boolean"},
+                                "auth_method": {"type": "string", "enum": ["x402", "api_key"]},
+                            },
+                            "required": ["content", "url", "status"],
+                        },
+                    },
+                    "required": ["type"],
+                },
             },
-            "required": ["url", "status", "data", "fields_requested", "fields_extracted"]
-        }
-    )
-)
+            "required": ["input"],
+        },
+    }
+}
+
+EXTRACT_BAZAAR_EXT = {
+    "bazaar": {
+        "info": {
+            "input": {
+                "type": "http",
+                "method": "POST",
+                "bodyType": "json",
+                "body": {
+                    "url": "https://example.com/product",
+                    "fields": ["title", "price", "availability"],
+                },
+            },
+            "output": {
+                "type": "json",
+                "example": {
+                    "url": "https://example.com/product",
+                    "status": "success",
+                    "data": {
+                        "title": "Example Product",
+                        "price": "£19.99",
+                        "availability": "in stock",
+                    },
+                    "auth_method": "x402",
+                },
+            },
+        },
+        "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "http"},
+                        "method": {"type": "string", "enum": ["POST", "PUT", "PATCH"]},
+                        "bodyType": {"type": "string", "enum": ["json", "form-data", "text"]},
+                        "body": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string", "format": "uri"},
+                                "fields": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "minItems": 1,
+                                },
+                            },
+                            "required": ["url", "fields"],
+                        },
+                    },
+                    "required": ["type", "method", "bodyType", "body"],
+                    "additionalProperties": False,
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "example": {"type": "object"},
+                    },
+                    "required": ["type"],
+                },
+            },
+            "required": ["input"],
+        },
+    }
+}
 
 # Models
 class ScrapeRequest(BaseModel):
@@ -749,7 +814,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.29",
+        "version": "0.7.31",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -759,7 +824,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.29",
+        "version": "0.7.31",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
