@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.7.31 - Manual bazaar extension with method POST for CDP indexing
+Version 0.7.32 - Manual bazaar extension with method POST for CDP indexing
 """
 
 import base64
@@ -291,7 +291,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.31",
+    version="0.7.32",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -320,6 +320,7 @@ SCRAPE_REQUIREMENTS = {
     "amount": "10000",  # $0.01 in atomic units
     "payTo": PAY_TO,
     "maxTimeoutSeconds": 300,
+    "extra": {"name": "USD Coin", "version": "2"},
 }
 
 EXTRACT_REQUIREMENTS = {
@@ -329,6 +330,7 @@ EXTRACT_REQUIREMENTS = {
     "amount": "50000",  # $0.05 in atomic units
     "payTo": PAY_TO,
     "maxTimeoutSeconds": 300,
+    "extra": {"name": "USD Coin", "version": "2"},
 }
 
 # Bazaar discovery extensions — manual declaration with method: POST
@@ -588,28 +590,26 @@ def payment_required_response(requirements: dict, resource: dict, bazaar_ext: di
     # Build accepts array with both facilitators
     accepts = []
     
-    # xpay.sh entry
-    accepts.append({
+    # Base accept entry (shared fields)
+    base_accept = {
         "scheme": requirements["scheme"],
         "network": requirements["network"],
         "asset": requirements["asset"],
         "amount": requirements["amount"],
         "payTo": requirements["payTo"],
         "maxTimeoutSeconds": requirements["maxTimeoutSeconds"],
-        "facilitator": XPAY_FACILITATOR,
-    })
+    }
     
-    # CDP entry (if credentials available)
+    # Add extra if present in requirements (EIP-712 domain info for agents)
+    if "extra" in requirements:
+        base_accept["extra"] = requirements["extra"]
+    
+    # xpay.sh entry — no facilitator field (agents infer from context)
+    accepts.append(dict(base_accept))
+    
+    # CDP entry (if credentials available) — no facilitator field
     if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
-        accepts.append({
-            "scheme": requirements["scheme"],
-            "network": requirements["network"],
-            "asset": requirements["asset"],
-            "amount": requirements["amount"],
-            "payTo": requirements["payTo"],
-            "maxTimeoutSeconds": requirements["maxTimeoutSeconds"],
-            "facilitator": CDP_FACILITATOR,
-        })
+        accepts.append(dict(base_accept))
     
     payload = {
         "x402Version": 2,
@@ -814,7 +814,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.31",
+        "version": "0.7.32",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -824,7 +824,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.31",
+        "version": "0.7.32",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
