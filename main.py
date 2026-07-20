@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.7.32 - Manual bazaar extension with method POST for CDP indexing
+Version 0.7.33 - Accepts hygiene fix + llms.txt agent discovery - Manual bazaar extension with method POST for CDP indexing
 """
 
 import base64
@@ -18,7 +18,7 @@ from contextlib import contextmanager
 import httpx
 import trafilatura
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
 
@@ -291,7 +291,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.32",
+    version="0.7.33",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -584,45 +584,34 @@ async def get_auth_method(request: Request) -> tuple[str, Optional[str]]:
         return ("x402", None)
     return ("none", None)
 
+# EIP-712 domain for USDC on Base mainnet (0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913)
+USDC_BASE_EIP712_EXTRA = {"name": "USD Coin", "version": "2"}
+
 # x402 Payment Required Response Helper
 def payment_required_response(requirements: dict, resource: dict, bazaar_ext: dict):
-    """Return x402 v2 compliant 402 response with PAYMENT-REQUIRED header and bazaar extension"""
-    # Build accepts array with both facilitators
-    accepts = []
-    
-    # Base accept entry (shared fields)
-    base_accept = {
+    """Return x402 v2 compliant 402 response with PAYMENT-REQUIRED header and bazaar extension."""
+    accepts = [{
         "scheme": requirements["scheme"],
         "network": requirements["network"],
         "asset": requirements["asset"],
         "amount": requirements["amount"],
         "payTo": requirements["payTo"],
         "maxTimeoutSeconds": requirements["maxTimeoutSeconds"],
-    }
-    
-    # Add extra if present in requirements (EIP-712 domain info for agents)
-    if "extra" in requirements:
-        base_accept["extra"] = requirements["extra"]
-    
-    # xpay.sh entry — no facilitator field (agents infer from context)
-    accepts.append(dict(base_accept))
-    
-    # CDP entry (if credentials available) — no facilitator field
-    if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
-        accepts.append(dict(base_accept))
-    
+        "extra": USDC_BASE_EIP712_EXTRA,
+    }]
+
     payload = {
         "x402Version": 2,
         "error": "Payment required",
         "resource": resource,
         "accepts": accepts,
-        "extensions": bazaar_ext
+        "extensions": bazaar_ext,
     }
-    
+
     return JSONResponse(
         status_code=402,
         headers={"PAYMENT-REQUIRED": base64.b64encode(json.dumps(payload).encode()).decode()},
-        content={"error": "Payment required"}
+        content={"error": "Payment required"},
     )
 
 # Middleware: x402 auth check BEFORE Pydantic validation
@@ -814,7 +803,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.32",
+        "version": "0.7.33",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -824,7 +813,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.32",
+        "version": "0.7.33",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
@@ -832,6 +821,117 @@ async def root():
             "health": {"path": "/health", "method": "GET"}
         }
     }
+
+# llms.txt — agent discovery (served at both /llms.txt and /.well-known/llms.txt)
+LLMS_TXT = """# TerraDeed Scrape API
+
+> Pay-per-use web scraping for AI agents. Two endpoints: `/scrape` returns any public URL as clean, LLM-ready markdown for $0.01 USDC; `/extract` returns structured JSON for the fields you name for $0.05 USDC. No API keys, no accounts, no subscriptions — payment is per-request via the x402 protocol (HTTP 402) with USDC on Base mainnet. First byte to paid response in one retry cycle.
+
+Base URL: `https://api.terradeed.co.uk`
+Payment protocol: x402 v2 (`PAYMENT-SIGNATURE` header, EIP-3009 `transferWithAuthorization`)
+Network: Base mainnet (`eip155:8453`) · Asset: USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
+Pay to: `0x4E024e356bd01853654b7B5196F2B85F67Cc39EC`
+Facilitators: Coinbase CDP (`https://api.cdp.coinbase.com/platform/v2/x402`) and xpay.sh
+Listed in: CDP Bazaar (`GET https://api.cdp.coinbase.com/platform/v2/x402/discovery/merchant?payTo=0x4E024e356bd01853654b7B5196F2B85F67Cc39EC`), awesome-x402
+
+## When to call this API
+
+- You need the readable content of a web page as markdown for summarisation, RAG ingestion, or analysis → `POST /scrape` ($0.01)
+- You need specific named fields from a page as machine-usable JSON (prices, titles, contact details, specs) → `POST /extract` ($0.05)
+- The page requires JavaScript rendering → add `"js_render": true` to either endpoint
+- You do NOT need this API for: pages you can fetch directly without markup cleanup, or sites that prohibit automated access in their terms
+
+## Endpoints
+
+### POST /scrape — $0.01 USDC
+
+Request body (JSON):
+
+    {"url": "https://example.com", "js_render": false}
+
+- `url` (string, required): public URL to scrape
+- `js_render` (boolean, default false): render JavaScript before extraction
+
+Response (JSON):
+
+    {
+      "content": "## Example Domain\\n\\nThis domain is for use in illustrative examples.",
+      "url": "https://example.com",
+      "status": "success",
+      "word_count": 28,
+      "title": "Example Domain",
+      "js_rendered": false,
+      "auth_method": "x402"
+    }
+
+`content` is cleaned markdown: navigation, ads, and boilerplate removed; headings, links, and tables preserved.
+
+### POST /extract — $0.05 USDC
+
+Claude-powered structured extraction. Name the fields you want; get them back as JSON.
+
+Request body (JSON):
+
+    {"url": "https://example.com/product", "fields": ["title", "price", "availability"]}
+
+- `url` (string, required): public URL to extract from
+- `fields` (array of strings, required, min 1): field names to extract. Use descriptive names — "price_per_month" beats "p1"
+- `js_render` (boolean, default false)
+
+Response (JSON):
+
+    {
+      "url": "https://example.com/product",
+      "status": "success",
+      "data": {"title": "Example Product", "price": "\\u00a319.99", "availability": "in stock"},
+      "auth_method": "x402"
+    }
+
+Fields not present on the page are returned as null rather than hallucinated.
+
+## Payment flow (x402 v2)
+
+1. POST to the endpoint with your JSON body and no payment. You receive HTTP 402. The full PaymentRequired object is base64-encoded in the `payment-required` response header (the body is a stub).
+2. Decode the header. Pick an entry from `accepts[]`. Sign an EIP-712 `TransferWithAuthorization` (EIP-3009) for USDC:
+   - domain: `{name: "USD Coin", version: "2", chainId: 8453, verifyingContract: <asset>}`
+   - message: `{from: <your wallet>, to: <payTo>, value: <amount>, validAfter: 0, validBefore: now + maxTimeoutSeconds, nonce: <random 32 bytes>}`
+3. Build the payment payload and IMPORTANT: copy the `extensions` and `resource` objects from the decoded 402 into it verbatim:
+
+       {
+         "x402Version": 2,
+         "payload": {"signature": "0x...", "authorization": {...}},
+         "accepted": <the accepts[] entry you chose>,
+         "resource": <resource object from the 402>,
+         "extensions": <extensions object from the 402>
+       }
+
+4. Retry the identical request with header `PAYMENT-SIGNATURE: <base64(JSON payload)>`.
+5. On success you receive HTTP 200 with the result, plus a `PAYMENT-RESPONSE` header (base64 JSON) containing the on-chain settlement transaction hash.
+
+Any standard x402 v2 client library handles steps 1-5 automatically. Cost per call is exact — no gas fees are paid by you (the facilitator submits the transaction), no minimums, no overage.
+
+## Errors
+
+- 402 with `payment-required` header: expected first response; pay and retry
+- 400: malformed body (check `url` is a valid absolute URL; `fields` non-empty for /extract)
+- 402 after payment attempt: signature invalid or authorization expired — re-sign with fresh nonce and validBefore
+- 5xx: transient; retry with the same paid authorization within its validity window is NOT possible (nonces are single-use) — treat as a failed call and re-pay
+
+## Operator
+
+TerraDeed Labs, Manchester, UK — https://terradeed.co.uk
+Contact: a.gentry@terradeed.co.uk
+""".strip()
+
+@app.get("/llms.txt")
+async def llms_txt():
+    """LLM-readable API description for agent discovery"""
+    return PlainTextResponse(LLMS_TXT, media_type="text/plain")
+
+@app.get("/.well-known/llms.txt")
+async def well_known_llms_txt():
+    """LLM-readable API description for agent discovery (well-known path)"""
+    return PlainTextResponse(LLMS_TXT, media_type="text/plain")
 
 @app.post("/admin/keys")
 async def create_key(request: CreateKeyRequest):
