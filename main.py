@@ -569,7 +569,13 @@ Content:
         raise HTTPException(status_code=502, detail=f"Anthropic error: {response.status_code} - {response.text}")
 
     try:
-        data = json.loads(response.json()["content"][0]["text"].strip())
+        raw_text = response.json()["content"][0]["text"].strip()
+        # Claude sometimes wraps JSON in markdown code fences — strip them
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text[3:]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3].strip()
+        data = json.loads(raw_text)
     except:
         raise HTTPException(status_code=502, detail="Malformed JSON from model")
 
