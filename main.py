@@ -726,8 +726,9 @@ async def scrape(body: ScrapeRequest, request: Request):
     if getattr(request.state, "x402_payment_valid", False):
         result = await _scrape(body.url, body.js_render)
         result["auth_method"] = "x402"
-        
+
         # Settle payment after successful service delivery
+        payment_response_header = None
         try:
             payload = getattr(request.state, "x402_payload", None)
             requirements = getattr(request.state, "x402_requirements", None)
@@ -739,14 +740,20 @@ async def scrape(body: ScrapeRequest, request: Request):
                 # DEBUG_SETTLE: Log full settle response
                 if os.environ.get("DEBUG_SETTLE"):
                     print(f"[DEBUG_SETTLE] /scrape settle_result: {json.dumps(settle_result, default=str, indent=2)}")
+                # PAYMENT-RESPONSE header per x402 v2 spec (base64-encoded JSON settlement receipt)
+                payment_response_header = base64.b64encode(
+                    json.dumps(settle_result, default=str).encode()
+                ).decode()
         except Exception as e:
             print(f"Payment settlement warning: {e}")
             if os.environ.get("DEBUG_SETTLE"):
                 import traceback
                 traceback.print_exc()
-        
+
+        if payment_response_header:
+            return JSONResponse(content=result, headers={"PAYMENT-RESPONSE": payment_response_header})
         return result
-    
+
     # No valid auth
     return payment_required_response(SCRAPE_REQUIREMENTS, SCRAPE_RESOURCE, SCRAPE_BAZAAR_EXT)
 
@@ -754,7 +761,7 @@ async def scrape(body: ScrapeRequest, request: Request):
 async def extract(body: ExtractRequest, request: Request):
     # Check for API key auth
     auth_method, api_key = await get_auth_method(request)
-    
+
     if auth_method == "api_key":
         key_info = validate_api_key(api_key)
         if not key_info:
@@ -763,21 +770,22 @@ async def extract(body: ExtractRequest, request: Request):
             raise HTTPException(status_code=401, detail=key_info["error"])
         if key_info["credits_remaining"] < EXTRACT_CREDITS:
             raise HTTPException(status_code=402, detail={"error": "Insufficient credits", "credits_remaining": key_info["credits_remaining"], "credits_required": EXTRACT_CREDITS})
-        
+
         markdown = (await _scrape(body.url, body.js_render))["content"]
         result = await _extract_structured(markdown, body.url, body.fields, body.js_render)
         deduct_credits(api_key, EXTRACT_CREDITS, "/extract")
         result["auth_method"] = "api_key"
         result["credits_remaining"] = key_info["credits_remaining"] - EXTRACT_CREDITS
         return result
-    
+
     # Check for x402 payment (verified in middleware)
     if getattr(request.state, "x402_payment_valid", False):
         markdown = (await _scrape(body.url, body.js_render))["content"]
         result = await _extract_structured(markdown, body.url, body.fields, body.js_render)
         result["auth_method"] = "x402"
-        
+
         # Settle payment after successful service delivery
+        payment_response_header = None
         try:
             payload = getattr(request.state, "x402_payload", None)
             requirements = getattr(request.state, "x402_requirements", None)
@@ -789,14 +797,20 @@ async def extract(body: ExtractRequest, request: Request):
                 # DEBUG_SETTLE: Log full settle response
                 if os.environ.get("DEBUG_SETTLE"):
                     print(f"[DEBUG_SETTLE] /extract settle_result: {json.dumps(settle_result, default=str, indent=2)}")
+                # PAYMENT-RESPONSE header per x402 v2 spec (base64-encoded JSON settlement receipt)
+                payment_response_header = base64.b64encode(
+                    json.dumps(settle_result, default=str).encode()
+                ).decode()
         except Exception as e:
             print(f"Payment settlement warning: {e}")
             if os.environ.get("DEBUG_SETTLE"):
                 import traceback
                 traceback.print_exc()
-        
+
+        if payment_response_header:
+            return JSONResponse(content=result, headers={"PAYMENT-RESPONSE": payment_response_header})
         return result
-    
+
     # No valid auth
     return payment_required_response(EXTRACT_REQUIREMENTS, EXTRACT_RESOURCE, EXTRACT_BAZAAR_EXT)
 
