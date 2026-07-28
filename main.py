@@ -605,9 +605,11 @@ def _fetch_static(url: str) -> tuple[str, None]:
 
 async def _fetch_with_playwright(url: str) -> str:
     from playwright.async_api import async_playwright
+    from playwright_stealth import stealth_async
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         page = await browser.new_page()
+        await stealth_async(page)
         await page.goto(url, wait_until="networkidle", timeout=30000)
         html = await page.content()
         await browser.close()
