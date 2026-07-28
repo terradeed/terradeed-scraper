@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.7.33 - Accepts hygiene fix + llms.txt agent discovery - Manual bazaar extension with method POST for CDP indexing
+Version 0.8.0 - Accepts hygiene fix + llms.txt agent discovery - Manual bazaar extension with method POST for CDP indexing
 """
 
 import base64
@@ -37,6 +37,8 @@ SCRAPE_PRICE = "$0.01"
 EXTRACT_PRICE = "$0.05"
 SCRAPE_CREDITS = 1
 EXTRACT_CREDITS = 5
+PROPERTY_PRICE = "$0.10"
+PROPERTY_CREDITS = 10
 NETWORK_CLIENT = "base"
 BASE_URL = "https://api.terradeed.co.uk"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
@@ -291,7 +293,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.7.33",
+    version="0.8.0",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -312,6 +314,12 @@ EXTRACT_RESOURCE = {
     "mimeType": "application/json",
 }
 
+PROPERTY_RESOURCE = {
+    "url": f"{BASE_URL}/extract/property",
+    "description": "Commercial property intelligence from any UK listing URL. Fixed schema: address, price, site area, use class, planning status, tenure, frontage, constraints, confidence scores. No field configuration needed — send a URL, get structured JSON.",
+    "mimeType": "application/json",
+}
+
 # Payment requirements
 SCRAPE_REQUIREMENTS = {
     "scheme": "exact",
@@ -328,6 +336,16 @@ EXTRACT_REQUIREMENTS = {
     "network": "eip155:8453",
     "asset": USDC_BASE,
     "amount": "50000",  # $0.05 in atomic units
+    "payTo": PAY_TO,
+    "maxTimeoutSeconds": 300,
+    "extra": {"name": "USD Coin", "version": "2"},
+}
+
+PROPERTY_REQUIREMENTS = {
+    "scheme": "exact",
+    "network": "eip155:8453",
+    "asset": USDC_BASE,
+    "amount": "100000",  # $0.10 in atomic units (6 decimals)
     "payTo": PAY_TO,
     "maxTimeoutSeconds": 300,
     "extra": {"name": "USD Coin", "version": "2"},
@@ -478,6 +496,82 @@ EXTRACT_BAZAAR_EXT = {
     }
 }
 
+PROPERTY_BAZAAR_EXT = {
+    "bazaar": {
+        "info": {
+            "input": {
+                "type": "http",
+                "method": "POST",
+                "bodyType": "json",
+                "body": {
+                    "url": "https://www.rightmove.co.uk/commercial-property-for-sale/property-12345.html",
+                },
+            },
+            "output": {
+                "type": "json",
+                "example": {
+                    "url": "https://www.rightmove.co.uk/commercial-property-for-sale/property-12345.html",
+                    "status": "success",
+                    "listing_type": "sale",
+                    "property": {
+                        "address": "Unit 4, Station Road, Solihull, B91 3RT",
+                        "coordinates": {"lat": 52.4121, "lng": -1.7773},
+                        "asking_price": 450000,
+                        "price_qualifier": "guide_price",
+                        "currency": "GBP",
+                        "site_area_sqft": 3600,
+                        "site_area_acres": 0.08,
+                        "use_class": "E",
+                        "current_use": "Former retail unit with forecourt parking",
+                        "tenure": "freehold",
+                        "lease_years_remaining": None,
+                        "epc_rating": "D",
+                        "description_summary": "Prominent roadside commercial unit...",
+                    },
+                    "vendor": {
+                        "agent_name": "Christie & Co",
+                        "agent_branch": "Birmingham",
+                    },
+                    "source": "rightmove_commercial",
+                    "auth_method": "x402",
+                },
+            },
+        },
+        "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "http"},
+                        "method": {"type": "string", "enum": ["POST"]},
+                        "bodyType": {"type": "string", "enum": ["json"]},
+                        "body": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string", "format": "uri"},
+                            },
+                            "required": ["url"],
+                        },
+                    },
+                    "required": ["type", "method", "bodyType", "body"],
+                    "additionalProperties": False,
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "example": {"type": "object"},
+                    },
+                    "required": ["type"],
+                },
+            },
+            "required": ["input"],
+        },
+    }
+}
+
 # Models
 class ScrapeRequest(BaseModel):
     url: str
@@ -487,6 +581,10 @@ class ExtractRequest(BaseModel):
     url: str
     fields: list[str]
     js_render: bool = False
+
+class PropertyExtractRequest(BaseModel):
+    url: str
+    js_render: bool = True  # Default True — property portals need JS
 
 class CreateKeyRequest(BaseModel):
     credits: int = 100
@@ -581,6 +679,138 @@ Content:
 
     return {"url": url, "status": "success", "data": data, "fields_requested": fields, "fields_extracted": [k for k, v in data.items() if v is not None], "js_rendered": js_rendered, "model": EXTRACT_MODEL}
 
+PROPERTY_SYSTEM_PROMPT = """You are a commercial property data extraction specialist. Extract structured property listing data from the provided page content.
+
+Return ONLY valid JSON matching this exact schema. Set any field to null if the information is not present or cannot be reliably determined.
+
+For confidence scores: use 0.95-1.0 when the value is explicitly stated on the page, 0.7-0.9 when inferred from context (e.g. use class derived from description), 0.3-0.6 when it's a best guess.
+
+Schema:
+{
+  "listing_type": "sale | lease | auction | development",
+  "property": {
+    "address": "Full address as shown on listing",
+    "coordinates": {"lat": number, "lng": number} or null,
+    "asking_price": number (in minor currency unit, e.g. 450000 not "£450,000"),
+    "price_qualifier": "guide_price | offers_invited | offers_over | POA | auction_guide | rent_pa | rent_pcm",
+    "price_per_sqft": number or null,
+    "currency": "GBP",
+    "site_area_sqft": number or null,
+    "site_area_acres": number or null,
+    "use_class": "E | B2 | B8 | C3 | F1 | Sui Generis | mixed" or null (use current England/Wales use class system),
+    "current_use": "Brief description of what the site is currently used for",
+    "tenure": "freehold | leasehold | both | unknown",
+    "lease_years_remaining": number or null,
+    "epc_rating": "A | B | C | D | E | F | G" or null,
+    "frontage_road": "Name of the main road the property fronts onto" or null,
+    "description_summary": "2-3 sentence summary of the listing description",
+    "bedrooms": number or null (for mixed-use or residential),
+    "bathrooms": number or null,
+    "floors": number or null,
+    "parking": true | false | null,
+    "constraints": {
+      "flood_zone": "1 | 2 | 3" or null,
+      "conservation_area": true | false | null,
+      "listed_building": "Grade I | Grade II | Grade II*" or null | false,
+      "green_belt": true | false | null
+    },
+    "planning": {
+      "existing_consent": "Description of current planning consent" or null,
+      "pending_applications": "Description of any pending applications" or null,
+      "permitted_development_potential": "Any PD rights mentioned" or null
+    }
+  },
+  "vendor": {
+    "agent_name": "Name of the selling/letting agent",
+    "agent_branch": "Branch/office location" or null,
+    "contact_phone": "Phone number" or null,
+    "listing_ref": "Agent's reference number" or null
+  },
+  "source": "rightmove_commercial | zoopla_commercial | onthemarket | christie | costar | loopnet | auction_house | agent_direct | other",
+  "confidence": {
+    "address": 0.0-1.0,
+    "asking_price": 0.0-1.0,
+    "site_area": 0.0-1.0,
+    "use_class": 0.0-1.0,
+    "tenure": 0.0-1.0,
+    "epc_rating": 0.0-1.0,
+    "constraints": 0.0-1.0,
+    "planning": 0.0-1.0
+  }
+}
+
+Rules:
+- Extract ONLY from the provided content. Never fabricate data.
+- Normalise prices to numeric values (450000 not "£450,000")
+- Normalise areas: if given in m², convert to sqft (1 m² = 10.764 sqft). Always provide sqft. Also provide acres if site is large enough (1 acre = 43,560 sqft).
+- Detect the source platform from the URL domain.
+- For use_class: map to current England/Wales classes. If the listing says "retail" without specifying, use "E". If it says "industrial", use "B2". If "warehouse/distribution", use "B8".
+- For listing_type: "auction" if auction guide price or auction house. "lease" if rent quoted. "sale" if capital price quoted. "development" if development opportunity.
+- Keep description_summary to 2-3 sentences max — focus on key commercial features.
+- Return ONLY the JSON object. No markdown fences, no commentary."""
+
+async def _extract_property(markdown: str, url: str, js_rendered: bool):
+    """Extract structured property data using a fixed commercial property schema."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY missing")
+
+    user_prompt = f"""Extract property listing data from this page.
+
+URL: {url}
+
+Content:
+{markdown[:12000]}"""
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": EXTRACT_MODEL,
+                "max_tokens": 2048,
+                "system": PROPERTY_SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": user_prompt}],
+            },
+            timeout=45,
+        )
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Anthropic error: {response.status_code} - {response.text}",
+        )
+
+    raw_text = response.json()["content"][0]["text"].strip()
+
+    # Strip markdown fences if Claude wraps them despite instructions
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("\n", 1)[-1]
+    if raw_text.endswith("```"):
+        raw_text = raw_text.rsplit("```", 1)[0]
+    raw_text = raw_text.strip()
+
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="Malformed JSON from model")
+
+    return {
+        "url": url,
+        "status": "success",
+        "listing_type": data.get("listing_type"),
+        "property": data.get("property", {}),
+        "vendor": data.get("vendor", {}),
+        "source": data.get("source", "other"),
+        "confidence": data.get("confidence", {}),
+        "extracted_at": datetime.now(timezone.utc).isoformat(),
+        "js_rendered": js_rendered,
+        "model": EXTRACT_MODEL,
+    }
+
 # Auth Helper
 async def get_auth_method(request: Request) -> tuple[str, Optional[str]]:
     auth_header = request.headers.get("authorization", "")
@@ -627,7 +857,7 @@ async def x402_auth_middleware(request: Request, call_next):
     Intercept POST /scrape and POST /extract to check auth before Pydantic validation.
     Returns 402 immediately if no valid auth present, avoiding 422 validation errors.
     """
-    if request.method == "POST" and request.url.path in ["/scrape", "/extract"]:
+    if request.method == "POST" and request.url.path in ["/scrape", "/extract", "/extract/property"]:
         auth_method, api_key = await get_auth_method(request)
         
         # If no auth provided, return 402 before validation runs
@@ -637,6 +867,12 @@ async def x402_auth_middleware(request: Request, call_next):
                     SCRAPE_REQUIREMENTS,
                     SCRAPE_RESOURCE,
                     SCRAPE_BAZAAR_EXT
+                )
+            elif request.url.path == "/extract/property":
+                return payment_required_response(
+                    PROPERTY_REQUIREMENTS,
+                    PROPERTY_RESOURCE,
+                    PROPERTY_BAZAAR_EXT
                 )
             else:
                 return payment_required_response(
@@ -658,7 +894,12 @@ async def x402_auth_middleware(request: Request, call_next):
                     payload = parse_payment_payload(decoded_bytes)
                     
                     # Build proper PaymentRequirements with EIP-712 domain info
-                    req_dict = SCRAPE_REQUIREMENTS if request.url.path == "/scrape" else EXTRACT_REQUIREMENTS
+                    if request.url.path == "/scrape":
+                        req_dict = SCRAPE_REQUIREMENTS
+                    elif request.url.path == "/extract/property":
+                        req_dict = PROPERTY_REQUIREMENTS
+                    else:
+                        req_dict = EXTRACT_REQUIREMENTS
                     requirements = PaymentRequirements(
                         scheme=req_dict["scheme"],
                         network=req_dict["network"],
@@ -757,6 +998,71 @@ async def scrape(body: ScrapeRequest, request: Request):
     # No valid auth
     return payment_required_response(SCRAPE_REQUIREMENTS, SCRAPE_RESOURCE, SCRAPE_BAZAAR_EXT)
 
+@app.post("/extract/property")
+async def extract_property(body: PropertyExtractRequest, request: Request):
+    """Extract structured commercial property data from a listing URL.
+    Fixed schema — no fields parameter needed. Returns normalised property
+    intelligence with confidence scores per field."""
+
+    # Check for API key auth
+    auth_method, api_key = await get_auth_method(request)
+
+    if auth_method == "api_key":
+        key_info = validate_api_key(api_key)
+        if not key_info:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        if "error" in key_info:
+            raise HTTPException(status_code=401, detail=key_info["error"])
+        if key_info["credits_remaining"] < PROPERTY_CREDITS:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "Insufficient credits",
+                    "credits_remaining": key_info["credits_remaining"],
+                    "credits_required": PROPERTY_CREDITS,
+                },
+            )
+
+        markdown = (await _scrape(body.url, body.js_render))["content"]
+        result = await _extract_property(markdown, body.url, body.js_render)
+        deduct_credits(api_key, PROPERTY_CREDITS, "/extract/property")
+        result["auth_method"] = "api_key"
+        result["credits_remaining"] = key_info["credits_remaining"] - PROPERTY_CREDITS
+        return result
+
+    # Check for x402 payment (verified in middleware)
+    if getattr(request.state, "x402_payment_valid", False):
+        markdown = (await _scrape(body.url, body.js_render))["content"]
+        result = await _extract_property(markdown, body.url, body.js_render)
+        result["auth_method"] = "x402"
+
+        # Settle payment after successful service delivery
+        try:
+            payload = getattr(request.state, "x402_payload", None)
+            requirements = getattr(request.state, "x402_requirements", None)
+            if payload and requirements:
+                settle_result = await x402_server.settle_payment(
+                    payload=payload,
+                    requirements=requirements,
+                )
+                if os.environ.get("DEBUG_SETTLE"):
+                    print(
+                        f"[DEBUG_SETTLE] /extract/property settle_result: "
+                        f"{json.dumps(settle_result, default=str, indent=2)}"
+                    )
+        except Exception as e:
+            print(f"Payment settlement warning: {e}")
+            if os.environ.get("DEBUG_SETTLE"):
+                import traceback
+                traceback.print_exc()
+
+        return result
+
+    # No valid auth
+    return payment_required_response(
+        PROPERTY_REQUIREMENTS, PROPERTY_RESOURCE, PROPERTY_BAZAAR_EXT
+    )
+
 @app.post("/extract")
 async def extract(body: ExtractRequest, request: Request):
     # Check for API key auth
@@ -823,7 +1129,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.7.33",
+        "version": "0.8.0",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -833,11 +1139,12 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.7.33",
+        "version": "0.8.0",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
             "extract": {"path": "/extract", "method": "POST", "price": EXTRACT_PRICE, "auth": ["x402", "api_key"]},
+            "extract_property": {"path": "/extract/property", "method": "POST", "price": PROPERTY_PRICE, "auth": ["x402", "api_key"], "description": "Commercial property intelligence — fixed schema, confidence scores"},
             "health": {"path": "/health", "method": "GET"}
         }
     }
@@ -845,7 +1152,7 @@ async def root():
 # llms.txt — agent discovery (served at both /llms.txt and /.well-known/llms.txt)
 LLMS_TXT = """# TerraDeed Scrape API
 
-> Pay-per-use web scraping for AI agents. Two endpoints: `/scrape` returns any public URL as clean, LLM-ready markdown for $0.01 USDC; `/extract` returns structured JSON for the fields you name for $0.05 USDC. No API keys, no accounts, no subscriptions — payment is per-request via the x402 protocol (HTTP 402) with USDC on Base mainnet. First byte to paid response in one retry cycle.
+> Pay-per-use web scraping for AI agents. Three endpoints: `/scrape` returns any public URL as clean, LLM-ready markdown for $0.01 USDC; `/extract` returns structured JSON for the fields you name for $0.05 USDC; `/extract/property` returns normalised commercial property intelligence with confidence scores for $0.10 USDC. No API keys, no accounts, no subscriptions — payment is per-request via the x402 protocol (HTTP 402) with USDC on Base mainnet. First byte to paid response in one retry cycle.
 
 Base URL: `https://api.terradeed.co.uk`
 Payment protocol: x402 v2 (`PAYMENT-SIGNATURE` header, EIP-3009 `transferWithAuthorization`)
@@ -858,6 +1165,7 @@ Listed in: CDP Bazaar (`GET https://api.cdp.coinbase.com/platform/v2/x402/discov
 
 - You need the readable content of a web page as markdown for summarisation, RAG ingestion, or analysis → `POST /scrape` ($0.01)
 - You need specific named fields from a page as machine-usable JSON (prices, titles, contact details, specs) → `POST /extract` ($0.05)
+- You need structured commercial property intelligence (address, price, use class, tenure, planning, confidence scores) from a UK listing → `POST /extract/property` ($0.10)
 - The page requires JavaScript rendering → add `"js_render": true` to either endpoint
 - You do NOT need this API for: pages you can fetch directly without markup cleanup, or sites that prohibit automated access in their terms
 
@@ -908,6 +1216,42 @@ Response (JSON):
     }
 
 Fields not present on the page are returned as null rather than hallucinated.
+
+### POST /extract/property — $0.10 USDC
+
+Claude-powered commercial property extraction. Fixed schema — no field list needed. Returns normalised property intelligence with per-field confidence scores.
+
+Request body (JSON):
+
+    {"url": "https://www.rightmove.co.uk/commercial-property-for-sale/property-12345.html"}
+
+- `url` (string, required): public URL of a UK commercial property listing
+- `js_render` (boolean, default true): property portals require JavaScript
+
+Response (JSON):
+
+    {
+      "url": "https://www.rightmove.co.uk/commercial-property-for-sale/property-12345.html",
+      "status": "success",
+      "listing_type": "sale",
+      "property": {
+        "address": "Unit 4, Station Road, Solihull, B91 3RT",
+        "asking_price": 450000,
+        "price_qualifier": "guide_price",
+        "currency": "GBP",
+        "site_area_sqft": 3600,
+        "use_class": "E",
+        "tenure": "freehold",
+        "epc_rating": "D",
+        "description_summary": "Prominent roadside commercial unit...",
+        "constraints": {"flood_zone": null, "conservation_area": false, "listed_building": false, "green_belt": false},
+        "planning": {"existing_consent": null, "pending_applications": null, "permitted_development_potential": null}
+      },
+      "vendor": {"agent_name": "Christie & Co", "agent_branch": "Birmingham", "contact_phone": null, "listing_ref": null},
+      "source": "rightmove_commercial",
+      "confidence": {"address": 1.0, "asking_price": 1.0, "site_area": 0.0, "use_class": 0.85, "tenure": 1.0, "epc_rating": 0.9, "constraints": 0.0, "planning": 0.0},
+      "auth_method": "x402"
+    }
 
 ## Payment flow (x402 v2)
 
