@@ -1,0 +1,42 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "TerraDeed Scrape API",
+  "description": "Pay-per-use web scraping and structured data extraction for AI agents. x402 v2, USDC on Base.",
+  "image": "https://terradeed.co.uk/logo.jpg",
+  "github_url": "https://github.com/terradeed/terradeed-scraper",
+  "active": true,
+  "services": [
+    {
+      "type": "http",
+      "url": "https://api.terradeed.co.uk/scrape",
+      "method": "POST",
+      "price": "0.01",
+      "currency": "USDC",
+      "network": "base"
+    },
+    {
+      "type": "http",
+      "url": "https://api.terradeed.co.uk/extract",
+      "method": "POST",
+      "price": "0.05",
+      "currency": "USDC",
+      "network": "base"
+    },
+    {
+      "type": "http",
+      "url": "https://api.terradeed.co.uk/extract/property",
+      "method": "POST",
+      "price": "0.10",
+      "currency": "USDC",
+      "network": "base"
+    }
+  ],
+  "x402Support": true,
+  "registrations": [
+    {
+      "agentId": 59998,
+      "agentRegistry": "eip155:8453:0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+    }
+  ],
+  "supportedTrust": ["reputation", "crypto-economic"]
+}
