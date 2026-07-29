@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.8.0 - Accepts hygiene fix + llms.txt agent discovery - Manual bazaar extension with method POST for CDP indexing
+Version 0.8.1 - Property enrichment with UK government data sources
 """
 
 import base64
@@ -30,6 +30,8 @@ from x402.schemas import SupportedResponse, SupportedKind
 from x402.extensions.bazaar import (
     bazaar_resource_server_extension,
 )
+
+from enrichment import enrich_property
 
 # Config
 PAY_TO = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
@@ -293,7 +295,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="Pay-per-use web scraping via x402 USDC or API keys",
-    version="0.8.0",
+    version="0.8.1",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -801,7 +803,8 @@ Content:
     except json.JSONDecodeError:
         raise HTTPException(status_code=502, detail="Malformed JSON from model")
 
-    return {
+    # Build base result
+    result = {
         "url": url,
         "status": "success",
         "listing_type": data.get("listing_type"),
@@ -813,6 +816,28 @@ Content:
         "js_rendered": js_rendered,
         "model": EXTRACT_MODEL,
     }
+
+    # Auto-enrich from UK government data sources
+    try:
+        property_data = result.get("property", {})
+        address = property_data.get("address", "")
+        coords = property_data.get("coordinates", {})
+        lat = coords.get("lat") if coords else None
+        lng = coords.get("lng") if coords else None
+
+        enrichment_data = await enrich_property(
+            address=address,
+            lat=lat,
+            lng=lng
+        )
+        result["enrichment"] = enrichment_data
+    except Exception as e:
+        result["enrichment"] = {
+            "enrichment_status": "error",
+            "error": str(e)
+        }
+
+    return result
 
 # Auth Helper
 async def get_auth_method(request: Request) -> tuple[str, Optional[str]]:
@@ -1132,7 +1157,7 @@ async def health():
     
     return {
         "status": "ok",
-        "version": "0.8.0",
+        "version": "0.8.1",
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -1142,7 +1167,7 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.8.0",
+        "version": "0.8.1",
         "documentation": "https://terradeed.co.uk/docs",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
