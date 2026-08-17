@@ -522,48 +522,48 @@ PROPERTY_BAZAAR_EXT = {
                     "status": "success",
                     "listing_type": "sale",
                     "property": {
-                        "address": "Unit 5, Bristol Road, BS1 4NA",
-                        "coordinates": {"lat": 51.4545, "lng": -2.5879},
-                        "asking_price": 650000,
-                        "price_qualifier": "guide_price",
+                        "address": "259 Bristol Road, Selly Oak, Birmingham B29 6NA",
+                        "coordinates": {"lat": 52.4401, "lng": -1.9357},
+                        "asking_price": 850000,
+                        "price_qualifier": "offers_over",
                         "currency": "GBP",
-                        "site_area_sqft": 4200,
-                        "site_area_acres": 0.096,
+                        "site_area_sqft": 5200,
+                        "site_area_acres": 0.12,
                         "use_class": "E",
-                        "current_use": "Ground-floor retail with first-floor office accommodation",
+                        "current_use": "Former bank branch with ATM recess and strong room",
                         "tenure": "freehold",
                         "lease_years_remaining": None,
                         "epc_rating": "C",
-                        "frontage_road": "Bristol Road",
-                        "description_summary": "Prominent corner unit on a main arterial route. Former bank premises with high ceilings, large display windows, and rear access. Suitable for retail, restaurant, or office conversion (STP).",
+                        "frontage_road": "Bristol Road (A38)",
+                        "description_summary": "Prominent corner unit on busy arterial route. 120 ft frontage. Former banking premises with vault, ATM housing, and disabled access. Suitable for retail, restaurant, or mixed-use redevelopment subject to planning.",
                         "constraints": {
                             "flood_zone": "3",
-                            "conservation_area": True,
+                            "conservation_area": False,
                             "listed_building": "Grade II",
-                            "green_belt": False
+                            "green_belt": False,
                         },
                         "planning": {
-                            "existing_consent": "A3 (restaurant) use class — lapsed 2019",
+                            "existing_consent": None,
                             "pending_applications": None,
-                            "permitted_development_potential": "Class E to residential conversion possible under PD (prior approval required)"
-                        }
+                            "permitted_development_potential": "Class E to residential (PDR 2021) may apply subject to prior approval",
+                        },
                     },
                     "vendor": {
-                        "agent_name": "Savills (UK) Ltd",
-                        "agent_branch": "Bristol",
-                        "contact_phone": "+44 (0)117 902 7000",
-                        "listing_ref": "SAV-BRS-2026-0542"
+                        "agent_name": "Christie & Co",
+                        "agent_branch": "Birmingham",
+                        "contact_phone": "0121 643 5555",
+                        "listing_ref": "BIR250184",
                     },
-                    "source": "savills_commercial",
+                    "source": "rightmove_commercial",
                     "confidence": {
-                        "address": 0.98,
-                        "asking_price": 0.95,
-                        "site_area": 0.72,
-                        "use_class": 0.85,
-                        "tenure": 0.97,
-                        "epc_rating": 0.91,
-                        "constraints": 0.88,
-                        "planning": 0.65
+                        "address": 1.0,
+                        "asking_price": 1.0,
+                        "site_area": 0.75,
+                        "use_class": 0.9,
+                        "tenure": 1.0,
+                        "epc_rating": 0.85,
+                        "constraints": 0.95,
+                        "planning": 0.6,
                     },
                     "auth_method": "x402",
                 },
@@ -1202,7 +1202,7 @@ async def root():
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
             "extract": {"path": "/extract", "method": "POST", "price": EXTRACT_PRICE, "auth": ["x402", "api_key"]},
-            "extract_property": {"path": "/extract/property", "method": "POST", "price": PROPERTY_PRICE, "auth": ["x402", "api_key"], "description": "UK commercial property intelligence \u2014 fixed schema, government data enrichment, confidence scores"},
+            "extract_property": {"path": "/extract/property", "method": "POST", "price": PROPERTY_PRICE, "auth": ["x402", "api_key"], "description": "UK commercial property intelligence with flood risk, heritage, and EPC enrichment — replaces 30 minutes of manual research per site"},
             "health": {"path": "/health", "method": "GET"}
         }
     }
@@ -1210,7 +1210,13 @@ async def root():
 # llms.txt — agent discovery (served at both /llms.txt and /.well-known/llms.txt)
 LLMS_TXT = """# TerraDeed Scrape API
 
-> x402-powered web data extraction for AI agents. Three endpoints that turn any URL into structured intelligence.
+> x402-powered web data extraction for AI agents. Three endpoints that turn any URL into usable intelligence:
+> 
+> • `/scrape` — Clean, LLM-ready markdown from any URL. JavaScript rendering included. Feed web content directly into agent context without parsing HTML. $0.01 USDC.
+> • `/extract` — Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back with confidence scores. No scraper configuration needed. $0.05 USDC.
+> • `/extract/property` — UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Auto-enriched with Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data. Site acquisition teams use this for initial screening — replaces 30 minutes of manual research per site. $0.10 USDC.
+> 
+> No API keys, no accounts, no subscriptions — payment is per-request via the x402 protocol (HTTP 402) with USDC on Base mainnet. First byte to paid response in one retry cycle.
 
 ## What this API does
 
@@ -1218,28 +1224,21 @@ LLMS_TXT = """# TerraDeed Scrape API
 - **Extract** (`POST /extract`, $0.05 USDC) — Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back with confidence scores. No scraper configuration needed.
 - **Extract Property** (`POST /extract/property`, $0.10 USDC) — UK commercial property and land intelligence from any listing URL. Auto-enriched with Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data. Site acquisition teams use this for initial screening.
 
-## Authentication
-
-Two options:
-1. **x402 USDC** on Base mainnet — the server returns a 402 with payment requirements; sign and send back
-2. **API key** — Bearer token for pre-paid credit accounts
-
-## Base URL
-
-```
-https://api.terradeed.co.uk
-```
+- You need the readable content of a web page as markdown for summarisation, RAG ingestion, or analysis → `POST /scrape` ($0.01)
+- You need specific named fields from a page as machine-usable JSON (prices, titles, contact details, specs, team structures) → `POST /extract` ($0.05)
+- You need structured UK commercial property intelligence with government data enrichment (flood risk, listed buildings, EPC) from any listing → `POST /extract/property` ($0.10)
+- The page requires JavaScript rendering → add `"js_render": true` to any endpoint
+- You do NOT need this API for: pages you can fetch directly without markup cleanup, or sites that prohibit automated access in their terms
 
 ## Endpoints
 
 ### POST /scrape
 
-Clean markdown from any public URL.
+Clean, LLM-ready markdown from any URL. JavaScript rendering included.
 
-**Body:**
-```json
-{"url": "https://example.com", "js_render": false}
-```
+Request body (JSON):
+
+    {"url": "https://example-jobsite.com/listing/senior-frontend-engineer-fintech", "js_render": true}
 
 **Returns:**
 ```json
@@ -1256,72 +1255,14 @@ Clean markdown...",
 }
 ```
 
-### POST /extract
-
-Structured data extraction with custom fields.
-
-**Body:**
-```json
-{"url": "https://example.com", "fields": ["company_name", "services", "team_size", "location"], "js_render": false}
-```
-
-**Returns:**
-```json
-{
-  "url": "https://example.com",
-  "status": "success",
-  "data": {
-    "company_name": "Example Ltd",
-    "services": ["Consulting", "Development"],
-    "team_size": "50+",
-    "location": "London, UK"
-  },
-  "fields_requested": ["company_name", "services", "team_size", "location"],
-  "fields_extracted": ["company_name", "services", "team_size", "location"],
-  "auth_method": "x402"
-}
-```
-
-### POST /extract/property
-
-UK commercial property intelligence with government data enrichment.
-
-**Body:**
-```json
-{"url": "https://savills.co.uk/commercial-property-for-sale/unit-5-bristol-road-bs1-4na", "js_render": true}
-```
-
-**Returns:**
-```json
-{
-  "url": "https://savills.co.uk/commercial-property-for-sale/unit-5-bristol-road-bs1-4na",
-  "status": "success",
-  "listing_type": "sale",
-  "property": {
-    "address": "Unit 5, Bristol Road, BS1 4NA",
-    "coordinates": {"lat": 51.4545, "lng": -2.5879},
-    "asking_price": 650000,
-    "price_qualifier": "guide_price",
-    "currency": "GBP",
-    "site_area_sqft": 4200,
-    "site_area_acres": 0.096,
-    "use_class": "E",
-    "current_use": "Ground-floor retail with first-floor office accommodation",
-    "tenure": "freehold",
-    "lease_years_remaining": null,
-    "epc_rating": "C",
-    "frontage_road": "Bristol Road",
-    "description_summary": "Prominent corner unit on a main arterial route. Former bank premises with high ceilings, large display windows, and rear access. Suitable for retail, restaurant, or office conversion (STP).",
-    "constraints": {
-      "flood_zone": "3",
-      "conservation_area": true,
-      "listed_building": "Grade II",
-      "green_belt": false
-    },
-    "planning": {
-      "existing_consent": "A3 (restaurant) use class — lapsed 2019",
-      "pending_applications": null,
-      "permitted_development_potential": "Class E to residential conversion possible under PD (prior approval required)"
+    {
+      "content": "# Senior Frontend Engineer — FinTech Start-up\\n\\n**Location:** London, UK (Hybrid — 2 days in office)\\n\\n**Salary:** £65,000 – £80,000 + equity\\n\\n## About the Role\\n\\nWe're looking for a Senior Frontend Engineer to lead our customer dashboard rebuild...",
+      "url": "https://example-jobsite.com/listing/senior-frontend-engineer-fintech",
+      "status": "success",
+      "word_count": 142,
+      "title": "Senior Frontend Engineer — FinTech Start-up",
+      "js_rendered": true,
+      "auth_method": "x402"
     }
   },
   "vendor": {
@@ -1347,9 +1288,135 @@ UK commercial property intelligence with government data enrichment.
 
 ## Contact
 
-- Website: https://terradeed.co.uk
-- Email: contact@terradeed.co.uk
-- X: @TerraDeed
+### POST /extract — $0.05 USDC
+
+Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back with confidence scores. No scraper configuration needed.
+
+Request body (JSON):
+
+    {"url": "https://savills.co.uk/commercial-property-for-sale/unit-5-bristol-road-bs1-4na", "fields": ["company_name", "services", "team_size", "location", "phone", "website", "specialisms"]}
+
+- `url` (string, required): public URL to extract from
+- `fields` (array of strings, required, min 1): field names to extract. Use descriptive names — "price_per_month" beats "p1"
+- `js_render` (boolean, default false)
+
+Response (JSON):
+
+    {
+      "url": "https://savills.co.uk/commercial-property-for-sale/unit-5-bristol-road-bs1-4na",
+      "status": "success",
+      "data": {
+        "company_name": "Savills (UK) Ltd",
+        "services": ["Commercial property sales", "Investment advisory", "Development consultancy", "Valuation"],
+        "team_size": "250+",
+        "location": "33 Margaret Street, London W1G 0JD",
+        "phone": "+44 (0)20 7016 3600",
+        "website": "https://www.savills.co.uk",
+        "specialisms": ["Office", "Retail", "Industrial", "Residential development"]
+      },
+      "fields_requested": ["company_name", "services", "team_size", "location", "phone", "website", "specialisms"],
+      "fields_extracted": ["company_name", "services", "team_size", "location", "phone", "website", "specialisms"],
+      "auth_method": "x402"
+    }
+
+Fields not present on the page are returned as null rather than hallucinated.
+
+### POST /extract/property — $0.10 USDC
+
+UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Auto-enriched with Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data. Site acquisition teams use this for initial screening — replaces 30 minutes of manual research per site.
+
+Request body (JSON):
+
+    {"url": "https://www.rightmove.co.uk/commercial-property-for-sale/property-12345.html"}
+
+- `url` (string, required): public URL of a UK commercial property listing
+- `js_render` (boolean, default true): property portals require JavaScript
+
+Response (JSON):
+
+    {
+      "url": "https://www.rightmove.co.uk/commercial-property-for-sale/property-12345.html",
+      "status": "success",
+      "listing_type": "sale",
+      "property": {
+        "address": "259 Bristol Road, Selly Oak, Birmingham B29 6NA",
+        "coordinates": {"lat": 52.4401, "lng": -1.9357},
+        "asking_price": 850000,
+        "price_qualifier": "offers_over",
+        "currency": "GBP",
+        "site_area_sqft": 5200,
+        "site_area_acres": 0.12,
+        "use_class": "E",
+        "current_use": "Former bank branch with ATM recess and strong room",
+        "tenure": "freehold",
+        "lease_years_remaining": null,
+        "epc_rating": "C",
+        "frontage_road": "Bristol Road (A38)",
+        "description_summary": "Prominent corner unit on busy arterial route. 120 ft frontage. Former banking premises with vault, ATM housing, and disabled access. Suitable for retail, restaurant, or mixed-use redevelopment subject to planning.",
+        "constraints": {
+          "flood_zone": "3",
+          "conservation_area": false,
+          "listed_building": "Grade II",
+          "green_belt": false
+        },
+        "planning": {
+          "existing_consent": null,
+          "pending_applications": null,
+          "permitted_development_potential": "Class E to residential (PDR 2021) may apply subject to prior approval"
+        }
+      },
+      "vendor": {
+        "agent_name": "Christie & Co",
+        "agent_branch": "Birmingham",
+        "contact_phone": "0121 643 5555",
+        "listing_ref": "BIR250184"
+      },
+      "source": "rightmove_commercial",
+      "confidence": {
+        "address": 1.0,
+        "asking_price": 1.0,
+        "site_area": 0.75,
+        "use_class": 0.9,
+        "tenure": 1.0,
+        "epc_rating": 0.85,
+        "constraints": 0.95,
+        "planning": 0.6
+      },
+      "auth_method": "x402"
+    }
+
+## Payment flow (x402 v2)
+
+1. POST to the endpoint with your JSON body and no payment. You receive HTTP 402. The full PaymentRequired object is base64-encoded in the `payment-required` response header (the body is a stub).
+2. Decode the header. Pick an entry from `accepts[]`. Sign an EIP-712 `TransferWithAuthorization` (EIP-3009) for USDC:
+   - domain: `{name: "USD Coin", version: "2", chainId: 8453, verifyingContract: <asset>}`
+   - message: `{from: <your wallet>, to: <payTo>, value: <amount>, validAfter: 0, validBefore: now + maxTimeoutSeconds, nonce: <random 32 bytes>}`
+3. Build the payment payload and IMPORTANT: copy the `extensions` and `resource` objects from the decoded 402 into it verbatim:
+
+       {
+         "x402Version": 2,
+         "payload": {"signature": "0x...", "authorization": {...}},
+         "accepted": <the accepts[] entry you chose>,
+         "resource": <resource object from the 402>,
+         "extensions": <extensions object from the 402>
+       }
+
+4. Retry the identical request with header `PAYMENT-SIGNATURE: <base64(JSON payload)>`.
+5. On success you receive HTTP 200 with the result, plus a `PAYMENT-RESPONSE` header (base64 JSON) containing the on-chain settlement transaction hash.
+
+Any standard x402 v2 client library handles steps 1-5 automatically. Cost per call is exact — no gas fees are paid by you (the facilitator submits the transaction), no minimums, no overage.
+
+## Errors
+
+- 402 with `payment-required` header: expected first response; pay and retry
+- 400: malformed body (check `url` is a valid absolute URL; `fields` non-empty for /extract)
+- 402 after payment attempt: signature invalid or authorization expired — re-sign with fresh nonce and validBefore
+- 5xx: transient; retry with the same paid authorization within its validity window is NOT possible (nonces are single-use) — treat as a failed call and re-pay
+
+## Operator
+
+TerraDeed Labs, Manchester, UK — https://terradeed.co.uk
+Contact: a.gentry@terradeed.co.uk
 """.strip()
 
 @app.get("/llms.txt")
