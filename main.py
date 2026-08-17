@@ -1350,8 +1350,7 @@ UK commercial property intelligence with government data enrichment.
 - Website: https://terradeed.co.uk
 - Email: contact@terradeed.co.uk
 - X: @TerraDeed
-"""
-.strip()
+""".strip()
 
 @app.get("/llms.txt")
 async def llms_txt():
