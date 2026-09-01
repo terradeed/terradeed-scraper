@@ -298,7 +298,7 @@ except Exception as e:
 app = FastAPI(
     title="TerraDeed Scrape API",
     description="x402-powered web data extraction for AI agents. Three endpoints: clean LLM-ready markdown (/scrape), structured JSON from any URL (/extract), and UK commercial property intelligence with government data enrichment (/extract/property). No accounts, no subscriptions — pay per call with USDC on Base mainnet.",
-    version="0.8.1",
+    version="0.8.2",
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
