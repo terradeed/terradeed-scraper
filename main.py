@@ -25,6 +25,7 @@ from pydantic import BaseModel
 # x402 imports
 from x402.server import x402ResourceServer
 from x402.http import HTTPFacilitatorClient, FacilitatorConfig
+from x402.mechanisms.evm.exact import ExactEvmServerScheme
 from x402.http.facilitator_client_base import AuthProvider, AuthHeaders
 from x402.schemas import SupportedResponse, SupportedKind
 from x402.extensions.bazaar import (
@@ -277,6 +278,8 @@ facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
 )))
 
 x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
+x402_server.register("eip155:8453", ExactEvmServerScheme())
+x402_server.register("base", ExactEvmServerScheme())
 x402_server.register_extension(bazaar_resource_server_extension)
 
 try:
@@ -693,8 +696,24 @@ Content:
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": EXTRACT_MODEL, "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]},
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+                "anthropic-beta": "prompt-caching-2024-07-31",
+            },
+            json={
+                "model": EXTRACT_MODEL,
+                "max_tokens": 1024,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": "Extract exactly the requested fields from the provided content. Return ONLY valid JSON. Set missing fields to null. Do not wrap output in markdown code fences.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                "messages": [{"role": "user", "content": prompt}],
+            },
             timeout=30,
         )
 
@@ -803,11 +822,18 @@ Content:
                 "x-api-key": ANTHROPIC_API_KEY,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
+                "anthropic-beta": "prompt-caching-2024-07-31",
             },
             json={
                 "model": EXTRACT_MODEL,
                 "max_tokens": 2048,
-                "system": PROPERTY_SYSTEM_PROMPT,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": PROPERTY_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 "messages": [{"role": "user", "content": user_prompt}],
             },
             timeout=45,
