@@ -41,6 +41,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
+# Force cache invalidation per-commit (fixes Railway BuildKit stale layer bug)
+ARG RAILWAY_GIT_COMMIT_SHA
+RUN echo "Building commit: $RAILWAY_GIT_COMMIT_SHA"
+
 # Copy application code
 COPY . .
 
