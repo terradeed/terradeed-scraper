@@ -3,12 +3,13 @@ Quick test script for API key functionality.
 Run this after starting the server to verify everything works.
 """
 
+import os
 import requests
 import json
 
-BASE_URL = "http://localhost:8080"
-TEST_KEY = "td_sk_test_terradeed_2026"
-ADMIN_SECRET = "terradeed-admin-2026"
+BASE_URL = os.environ.get("TERRADEED_TEST_URL", "http://localhost:8080")
+TEST_KEY = os.environ.get("TERRADEED_TEST_KEY", "")
+ADMIN_SECRET = os.environ.get("TERRADEED_ADMIN_SECRET", "")
 
 def test_health():
     """Test the health endpoint."""
@@ -60,12 +61,12 @@ def test_scrape_without_auth():
 def test_create_key():
     """Test creating a new API key."""
     payload = {
-        "admin_secret": ADMIN_SECRET,
         "credits": 500,
         "rate_limit": 120
     }
+    headers = {"x-admin-secret": ADMIN_SECRET}
     
-    r = requests.post(f"{BASE_URL}/admin/keys", json=payload)
+    r = requests.post(f"{BASE_URL}/admin/keys", json=payload, headers=headers)
     print(f"\nCreate new key: {r.status_code}")
     if r.status_code == 200:
         data = r.json()
@@ -75,20 +76,6 @@ def test_create_key():
     else:
         print(f"  Error: {r.text}")
         return None
-
-def test_list_keys():
-    """Test listing all keys."""
-    r = requests.get(f"{BASE_URL}/admin/keys", params={"admin_secret": ADMIN_SECRET})
-    print(f"\nList keys: {r.status_code}")
-    if r.status_code == 200:
-        data = r.json()
-        print(f"  Total keys: {data.get('count')}")
-        for key in data.get('keys', [])[:3]:
-            print(f"    {key['key_prefix']}: {key['credits_remaining']} credits, {key['total_calls']} calls")
-        return True
-    else:
-        print(f"  Error: {r.text}")
-        return False
 
 def test_extract_with_key():
     """Test extraction with API key."""
@@ -122,7 +109,7 @@ if __name__ == "__main__":
         test_scrape_without_auth()
         test_scrape_with_key()
         test_extract_with_key()
-        test_list_keys()
+        print("\n[Skipping list_keys — endpoint removed]")
         new_key = test_create_key()
         
         if new_key:
