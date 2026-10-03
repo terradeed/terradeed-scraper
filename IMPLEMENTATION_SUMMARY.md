@@ -6,7 +6,7 @@
 
 1. **Dual Authentication System**
    - **x402 USDC payments**: Existing payment flow via `Payment-Signature` header
-   - **API Key (Bearer token)**: New prepaid credit system via `Authorization: Bearer ***Both work in parallel on the same endpoints (`/scrape`, `/extract`)
+   - **API Key (Bearer token)**: New prepaid credit system via `Authorization: Bearer <API_KEY>Both work in parallel on the same endpoints (`/scrape`, `/extract`)
 
 2. **SQLite Database Layer**
    - `api_keys` table: stores key hashes, credits, rate limits, usage stats
@@ -19,18 +19,15 @@
    - Credits deducted only on successful calls
    - Returns `credits_remaining` in response
 
-4. **Hardcoded Test Key**
-   - Key: `td_sk_test_terradeed_2026`
-   - Credits: 1000
-   - Rate limit: 60/min
-   - Ready for immediate testing
+4. **API Key Creation**
+   - Create keys via `POST /admin/keys` with `x-admin-secret` header
+   - Credits and rate limits configurable per key
 
 5. **Admin Endpoints** (requires `ADMIN_SECRET` env var)
    - `POST /admin/keys` — create new API key
-   - `GET /admin/keys` — list all keys
    - `GET /admin/keys/{prefix}` — get key details
-   - `POST /admin/keys/{prefix}/revoke` — revoke a key
-   - `POST /admin/keys/{prefix}/add-credits` — add credits to key
+
+   > `list-all`, `revoke`, and `add-credits` endpoints are not yet implemented.
 
 6. **Updated Response Models**
    - All responses now include `auth_method` ("x402" or "api_key")
@@ -95,14 +92,14 @@ python test_api_keys.py
 - [ ] Set `ADMIN_SECRET` in Railway environment
 - [ ] Set `DATABASE_URL=sqlite:///app/terradeed.db`
 - [ ] Deploy: `railway up`
-- [ ] Test with: `curl -H "Authorization: Bearer td_sk_test_terradeed_2026" https://api.terradeed.co.uk/scrape -d '{"url":"https://example.com"}'`
+- [ ] Test with: `curl -H "Authorization: Bearer <API_KEY>" https://api.terradeed.co.uk/scrape -d '{"url":"https://example.com"}'`
 - [ ] Create production keys via `/admin/keys`
 - [ ] Update landing page with API key pricing
 
 ## Migration Path for Users
 
 Existing x402 users: no changes needed.  
-New API key users: just add `Authorization: Bearer ***No wallet setup, no USDC, no on-chain transactions.
+New API key users: just add `Authorization: Bearer <API_KEY>No wallet setup, no USDC, no on-chain transactions.
 
 ## Revenue Model
 

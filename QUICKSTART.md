@@ -1,16 +1,14 @@
 # TerraDeed API — Quick Reference
 
-## Test Key (Immediate Use)
-```
-td_sk_test_terradeed_2026
-```
+## Test Key
+Set `TERRADEED_TEST_KEY` environment variable to a key created via the admin endpoint.
 
 ## Test Commands
 
 ### Scrape (1 credit)
 ```bash
 curl -X POST http://localhost:8080/scrape \
-  -H "Authorization: Bearer td_sk_test_terradeed_2026" \
+  -H "Authorization: Bearer <API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com"}'
 ```
@@ -18,7 +16,7 @@ curl -X POST http://localhost:8080/scrape \
 ### Extract (5 credits)
 ```bash
 curl -X POST http://localhost:8080/extract \
-  -H "Authorization: Bearer td_sk_test_terradeed_2026" \
+  -H "Authorization: Bearer <API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com", "fields": ["title", "description"]}'
 ```
@@ -28,29 +26,23 @@ curl -X POST http://localhost:8080/extract \
 curl http://localhost:8080/health
 ```
 
-### Test Key Status
-```bash
-curl "http://localhost:8080/test-key?api_key=td_sk_test_terradeed_2026"
-```
-
 ## Admin Commands (requires ADMIN_SECRET)
 
 ### Create New Key
 ```bash
 curl -X POST http://localhost:8080/admin/keys \
   -H "Content-Type: application/json" \
-  -d '{"admin_secret": "terradeed-admin-2026", "credits": 500}'
+  -H "x-admin-secret: <ADMIN_SECRET>" \
+  -d '{"credits": 500}'
 ```
 
-### List All Keys
+### Get Key Status
 ```bash
-curl "http://localhost:8080/admin/keys?admin_secret=terradeed-admin-2026"
+curl -H "x-admin-secret: <ADMIN_SECRET>" \
+  "http://localhost:8080/admin/keys/<KEY_PREFIX>"
 ```
 
-### Add Credits
-```bash
-curl -X POST "http://localhost:8080/admin/keys/td_sk_tes.../add-credits?credits=1000&admin_secret=terradeed-admin-2026"
-```
+> **Note:** `add-credits`, `revoke`, and `list-all` endpoints are not yet implemented.
 
 ## Deploy to Railway
 

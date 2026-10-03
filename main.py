@@ -48,12 +48,14 @@ USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 EXTRACT_MODEL = "claude-sonnet-4-6"
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "terradeed-admin-2026")
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
+if len(ADMIN_SECRET) < 32:
+    raise RuntimeError("ADMIN_SECRET must be set to a 32+ character value")
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./terradeed.db")
+DB_PATH = DATABASE_URL.replace("sqlite:///", "") if DATABASE_URL.startswith("sqlite://") else "./terradeed.db"
+logging.warning("Database path: %s. Data will be lost on every redeploy unless a persistent volume is mounted at this path.", DB_PATH)
 CDP_API_KEY_ID = os.environ.get("CDP_API_KEY_ID", "")
 CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
-
-DB_PATH = DATABASE_URL.replace("sqlite:///", "") if DATABASE_URL.startswith("sqlite://") else "./terradeed.db"
 
 # Database
 @contextmanager
@@ -130,20 +132,6 @@ def deduct_credits(key: str, credits: int, endpoint: str) -> bool:
             return False
         conn.commit()
     return True
-
-def ensure_test_key():
-    test_key = "td_sk_test_terradeed_2026"
-    key_hash = hash_key(test_key)
-    with get_db() as conn:
-        cursor = conn.execute("SELECT 1 FROM api_keys WHERE key_hash = ?", (key_hash,))
-        if not cursor.fetchone():
-            conn.execute(
-                "INSERT INTO api_keys (key_hash, key_prefix, credits_remaining, created_at) VALUES (?, ?, ?, ?)",
-                (key_hash, get_key_prefix(test_key), 1000, datetime.now(timezone.utc).isoformat())
-            )
-            conn.commit()
-
-ensure_test_key()
 
 # ============================================================================
 # CDP facilitator configuration — drop-in replacement for the existing section
@@ -624,7 +612,6 @@ class PropertyExtractRequest(BaseModel):
 class CreateKeyRequest(BaseModel):
     credits: int = 100
     rate_limit: int = 60
-    admin_secret: str
 
 # Scraping Functions
 def _fetch_static(url: str) -> tuple[str, None]:
@@ -1456,9 +1443,10 @@ async def well_known_llms_txt():
     return PlainTextResponse(LLMS_TXT, media_type="text/plain")
 
 @app.post("/admin/keys")
-async def create_key(request: CreateKeyRequest):
+async def create_key(request: CreateKeyRequest, http_request: Request):
     """Create a new API key (admin only)"""
-    if request.admin_secret != ADMIN_SECRET:
+    admin_secret = http_request.headers.get("x-admin-secret", "")
+    if not secrets.compare_digest(admin_secret.encode(), ADMIN_SECRET.encode()):
         raise HTTPException(status_code=401, detail="Invalid admin secret")
     
     # Generate new key
@@ -1480,7 +1468,7 @@ async def create_key(request: CreateKeyRequest):
 async def get_key_status(key_prefix: str, request: Request):
     """Get API key status (admin only)"""
     admin_secret = request.headers.get("x-admin-secret", "")
-    if admin_secret != ADMIN_SECRET:
+    if not secrets.compare_digest(admin_secret.encode(), ADMIN_SECRET.encode()):
         raise HTTPException(status_code=401, detail="Invalid admin secret")
     
     with get_db() as conn:

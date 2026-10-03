@@ -8,13 +8,7 @@
 
 ### 1. Get an API Key
 
-Contact [contact@terradeed.co.uk](mailto:contact@terradeed.co.uk) to purchase prepaid credits, or use the test key for development:
-
-```
-td_sk_test_terradeed_2026
-```
-
-*(Test key has 1000 credits, rate limited to 60/min)*
+Contact [contact@terradeed.co.uk](mailto:contact@terradeed.co.uk) to purchase prepaid credits, or create a key via the admin endpoint.
 
 ### 2. Make Requests
 
@@ -22,7 +16,7 @@ td_sk_test_terradeed_2026
 
 ```bash
 curl -X POST https://api.terradeed.co.uk/scrape \
-  -H "Authorization: Bearer td_sk_test_terradeed_2026" \
+  -H "Authorization: Bearer <API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com", "js_render": false}'
 ```
@@ -45,7 +39,7 @@ curl -X POST https://api.terradeed.co.uk/scrape \
 
 ```bash
 curl -X POST https://api.terradeed.co.uk/extract \
-  -H "Authorization: Bearer td_sk_test_terradeed_2026" \
+  -H "Authorization: Bearer <API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://example.com/product",
@@ -133,8 +127,9 @@ Use the test key for development:
 
 ```python
 import requests
+import os
 
-API_KEY = "td_sk_test_terradeed_2026"
+API_KEY = os.environ.get("TERRADEED_API_KEY", "")
 response = requests.post(
     "https://api.terradeed.co.uk/scrape",
     headers={"Authorization": f"Bearer {API_KEY}"},
@@ -148,10 +143,11 @@ print(response.json())
 ## JavaScript Example
 
 ```javascript
+const API_KEY = process.env.TERRADEED_API_KEY;
 const response = await fetch('https://api.terradeed.co.uk/scrape', {
   method: 'POST',
   headers: {
-    'Authorization': 'Bearer td_sk_test_terradeed_2026',
+    'Authorization': `Bearer ${API_KEY}`,
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
@@ -169,9 +165,10 @@ console.log(`Credits remaining: ${data.credits_remaining}`);
 ## Python Example
 
 ```python
+import os
 import requests
 
-API_KEY = "td_sk_test_terradeed_2026"
+API_KEY = os.environ.get("TERRADEED_API_KEY", "")
 
 def scrape(url, js_render=False):
     response = requests.post(
@@ -192,7 +189,7 @@ print(result["content"])
 
 If you're already using x402, you can switch to API keys by simply:
 
-1. Replacing the `Payment-Signature` header with `Authorization: Bearer *** 2. Removing the payment negotiation flow
+1. Replacing the `Payment-Signature` header with `Authorization: Bearer <API_KEY> 2. Removing the payment negotiation flow
 
 The endpoints, request bodies, and response formats are identical.
 
