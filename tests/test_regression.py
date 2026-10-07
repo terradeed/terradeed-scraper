@@ -5,7 +5,7 @@ These tests use saved HTML fixtures (no network calls) to verify that
 trafilatura.extract() behaves consistently across version upgrades.
 
 To regenerate snapshots after a deliberate extraction change:
-    python generate_snapshots.py
+    python tests/generate_snapshots.py
 
 --- Default vs favor_recall=True comparison (trafilatura 2.3.1) ---
 
@@ -13,17 +13,16 @@ Fixture                | Defaults wc | favor_recall wc | Delta   | Notes
 -----------------------|-------------|-----------------|---------|-------
 quotes_2.3.1 (A)       | 189         | 192             | +1.6%   | defaults: 8 quotes; favor_recall: 10 quotes, no Tags
 books_2.3.1 (C)        | 248         | 248             | 0%      | Identical
-webscraper_2.3.1 (B)   | 72          | 72              | 0%      | Identical — cookie banner only
+webscraper_2.3.1 (B)   | 72          | 72              | 0%      | Identical, cookie banner only
 example                | 25          | 25              | 0%      | Identical
-govuk_tax              | 483         | 483             | 0%      | Identical — tables survive
-wiki_manchester        | 20,052      | 20,052          | 0%      | Identical — tables survive
+govuk_tax              | 483         | 483             | 0%      | Identical, tables survive
+wiki_manchester        | 20,052      | 20,052          | 0%      | Identical, tables survive
 python_about           | 187         | 200             | +7.0%   | Slightly more content
-quotes_static          | 271         | 212             | −21.8%  | Defaults keep more
+quotes_static          | 271         | 212             | -21.8%  | Defaults keep more
 books_catalogue        | 60          | 198             | +230%   | **favor_recall injects nav/boilerplate**
 
-Decision: keep trafilatura defaults (no favor_recall). The +230% boilerplate
-injection on books_catalogue is unacceptable. Quote completeness on A is a
-known limitation tracked for follow-up work.
+Mixed results: recovers the listing on the catalogue page but adds pagination,
+drops tags on quotes pages. No change made.
 """
 
 import json

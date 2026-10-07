@@ -4,3 +4,4 @@ __pycache__/
 .env
 PRIVATE_KEY
 venv/
+venv-pr1b/
