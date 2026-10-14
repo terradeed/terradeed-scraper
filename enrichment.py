@@ -241,7 +241,7 @@ async def get_heritage_data(lat: float, lng: float, radius_m: int = 500) -> Dict
 
         url = (
             "https://services-eu1.arcgis.com/ZOdPfBS3aqqDYPUQ/arcgis/rest/services/"
-            "Listed_Buildings/FeatureServer/0/query"
+            "National_Heritage_List_for_England_NHLE_v02_VIEW/FeatureServer/0/query"
         )
 
         params = {
@@ -251,7 +251,7 @@ async def get_heritage_data(lat: float, lng: float, radius_m: int = 500) -> Dict
             "inSR": "4326",
             "outSR": "4326",
             "spatialRel": "esriSpatialRelIntersects",
-            "outFields": "Name,Grade,ListDate,NHLE_Link",
+            "outFields": "Name,Grade,ListDate,hyperlink",
             "returnGeometry": "true",
             "f": "json",
             "resultRecordCount": 10
@@ -390,7 +390,14 @@ async def enrich_property(
 
     all_failed = len(failed_sources) == len(tasks)
 
-    enrichment["enrichment_status"] = "complete"
+    if all_failed:
+        enrichment["enrichment_status"] = "failed"
+        enrichment["all_sources_failed"] = True
+    elif failed_sources:
+        enrichment["enrichment_status"] = "partial"
+    else:
+        enrichment["enrichment_status"] = "complete"
+
     enrichment["data_complete"] = not all_failed and len(failed_sources) == 0
     enrichment["failed_sources"] = failed_sources
     if all_failed:

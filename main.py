@@ -309,7 +309,7 @@ EXTRACT_RESOURCE = {
 
 PROPERTY_RESOURCE = {
     "url": f"{BASE_URL}/extract/property",
-    "description": "UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available. Enrichment depends on postcode extraction and upstream government API availability.",
+    "description": "UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data. Each source reports its own status; enrichment is not guaranteed.",
     "mimeType": "application/json",
 }
 
