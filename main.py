@@ -309,7 +309,7 @@ EXTRACT_RESOURCE = {
 
 PROPERTY_RESOURCE = {
     "url": f"{BASE_URL}/extract/property",
-    "description": "UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Auto-enriched with Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data. Site acquisition teams use this for initial screening \u2014 replaces 30 minutes of manual research per site.",
+    "description": "UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data. Each source reports its own status; enrichment is not guaranteed.",
     "mimeType": "application/json",
 }
 
@@ -874,11 +874,17 @@ Content:
             lng=lng
         )
         result["enrichment"] = enrichment_data
+        result["data_complete"] = enrichment_data.get("data_complete", False)
+        result["failed_sources"] = enrichment_data.get("failed_sources", [])
     except Exception as e:
         result["enrichment"] = {
             "enrichment_status": "error",
+            "data_complete": False,
+            "failed_sources": ["enrichment_orchestrator"],
             "error": str(e)
         }
+        result["data_complete"] = False
+        result["failed_sources"] = ["enrichment_orchestrator"]
 
     return result
 
@@ -1211,11 +1217,11 @@ async def root():
     return {
         "service": "TerraDeed Scrape API",
         "version": "0.8.1",
-        "documentation": "https://terradeed.co.uk/docs",
+        "documentation": "https://www.terradeed.co.uk/api",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
             "extract": {"path": "/extract", "method": "POST", "price": EXTRACT_PRICE, "auth": ["x402", "api_key"]},
-            "extract_property": {"path": "/extract/property", "method": "POST", "price": PROPERTY_PRICE, "auth": ["x402", "api_key"], "description": "UK commercial property intelligence with flood risk, heritage, and EPC enrichment — replaces 30 minutes of manual research per site"},
+            "extract_property": {"path": "/extract/property", "method": "POST", "price": PROPERTY_PRICE, "auth": ["x402", "api_key"], "description": "UK commercial property intelligence. Attempts enrichment from government open data where available."},
             "health": {"path": "/health", "method": "GET"}
         }
     }
@@ -1227,7 +1233,7 @@ LLMS_TXT = """# TerraDeed Scrape API
 > 
 > • `/scrape` — Clean, LLM-ready markdown from any URL. JavaScript rendering included. Feed web content directly into agent context without parsing HTML. $0.01 USDC.
 > • `/extract` — Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back with confidence scores. No scraper configuration needed. $0.05 USDC.
-> • `/extract/property` — UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Auto-enriched with Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data. Site acquisition teams use this for initial screening — replaces 30 minutes of manual research per site. $0.10 USDC.
+> • `/extract/property` — UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available. $0.10 USDC.
 > 
 > No API keys, no accounts, no subscriptions — payment is per-request via the x402 protocol (HTTP 402) with USDC on Base mainnet. First byte to paid response in one retry cycle.
 
@@ -1235,7 +1241,7 @@ LLMS_TXT = """# TerraDeed Scrape API
 
 - **Scrape** (`POST /scrape`, $0.01 USDC) — Clean, LLM-ready markdown from any URL. JavaScript rendering included. Feed web content directly into agent context without parsing HTML.
 - **Extract** (`POST /extract`, $0.05 USDC) — Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back with confidence scores. No scraper configuration needed.
-- **Extract Property** (`POST /extract/property`, $0.10 USDC) — UK commercial property and land intelligence from any listing URL. Auto-enriched with Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data. Site acquisition teams use this for initial screening.
+- **Extract Property** (`POST /extract/property`, $0.10 USDC) — UK commercial property and land intelligence from any listing URL. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available. Site acquisition teams use this for initial screening.
 
 - You need the readable content of a web page as markdown for summarisation, RAG ingestion, or analysis → `POST /scrape` ($0.01)
 - You need specific named fields from a page as machine-usable JSON (prices, titles, contact details, specs, team structures) → `POST /extract` ($0.05)
@@ -1336,7 +1342,7 @@ Fields not present on the page are returned as null rather than hallucinated.
 
 ### POST /extract/property — $0.10 USDC
 
-UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Auto-enriched with Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data. Site acquisition teams use this for initial screening — replaces 30 minutes of manual research per site.
+UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available.
 
 Request body (JSON):
 
@@ -1507,6 +1513,18 @@ def custom_openapi():
             for method in openapi_schema["paths"][path]:
                 if method in ("get", "post", "put", "delete", "patch"):
                     openapi_schema["paths"][path][method]["security"] = []
+    # Add per-call pricing to paid endpoints
+    pricing = {
+        "/scrape": SCRAPE_PRICE,
+        "/extract": EXTRACT_PRICE,
+        "/extract/property": PROPERTY_PRICE,
+    }
+    for path, price in pricing.items():
+        if path in openapi_schema.get("paths", {}):
+            for method in openapi_schema["paths"][path]:
+                if method == "post":
+                    desc = openapi_schema["paths"][path][method].get("description", "")
+                    openapi_schema["paths"][path][method]["description"] = f"{desc}\n\n**Price:** {price} USDC per call."
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
