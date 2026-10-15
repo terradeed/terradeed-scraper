@@ -1107,17 +1107,6 @@ async def extract_property(body: PropertyExtractRequest, request: Request):
         result["credits_remaining"] = key_info["credits_remaining"] - PROPERTY_CREDITS
         return result
 
-    # DESIGN NOTE: Options when all enrichment sources fail
-    # 1. Return 200 with result + a "partial_refund" flag; settle payment normally
-    #    but log the failure for manual refund review.
-    # 2. Do not settle the x402 payment at all (return 402 or 503 before settlement).
-    #    This is tricky because the scraper + extractor already ran and used compute.
-    # 3. Issue an on-chain refund (requires building a refund flow in the facilitator
-    #    or maintaining a refund mapping table).
-    # 4. Issue API-key credit refund only (simpler; deduct fewer credits).
-    # Recommended: option 1 for x402, option 4 for API keys, with a dashboard alert
-    # when partial_refund rate exceeds a threshold.
-
     # Check for x402 payment (verified in middleware)
     if getattr(request.state, "x402_payment_valid", False):
         markdown = (await _scrape(body.url, body.js_render))["content"]
@@ -1232,7 +1221,7 @@ async def root():
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
             "extract": {"path": "/extract", "method": "POST", "price": EXTRACT_PRICE, "auth": ["x402", "api_key"]},
-            "extract_property": {"path": "/extract/property", "method": "POST", "price": PROPERTY_PRICE, "auth": ["x402", "api_key"], "description": "UK commercial property intelligence. Attempts enrichment from government open data where available. Replaces 30 minutes of manual research per site when enrichment succeeds."},
+            "extract_property": {"path": "/extract/property", "method": "POST", "price": PROPERTY_PRICE, "auth": ["x402", "api_key"], "description": "UK commercial property intelligence. Attempts enrichment from government open data where available."},
             "health": {"path": "/health", "method": "GET"}
         }
     }
@@ -1244,7 +1233,7 @@ LLMS_TXT = """# TerraDeed Scrape API
 > 
 > • `/scrape` — Clean, LLM-ready markdown from any URL. JavaScript rendering included. Feed web content directly into agent context without parsing HTML. $0.01 USDC.
 > • `/extract` — Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back with confidence scores. No scraper configuration needed. $0.05 USDC.
-> • `/extract/property` — UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available. Replaces 30 minutes of manual research per site when enrichment succeeds. $0.10 USDC.
+> • `/extract/property` — UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available. $0.10 USDC.
 > 
 > No API keys, no accounts, no subscriptions — payment is per-request via the x402 protocol (HTTP 402) with USDC on Base mainnet. First byte to paid response in one retry cycle.
 
@@ -1353,7 +1342,7 @@ Fields not present on the page are returned as null rather than hallucinated.
 
 ### POST /extract/property — $0.10 USDC
 
-UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available. Replaces 30 minutes of manual research per site when enrichment succeeds.
+UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available.
 
 Request body (JSON):
 

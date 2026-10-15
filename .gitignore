@@ -5,3 +5,5 @@ __pycache__/
 PRIVATE_KEY
 venv/
 venv-pr1b/
+pr11-fixes.patch
+terradeed.db

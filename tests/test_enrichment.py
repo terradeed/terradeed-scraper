@@ -259,6 +259,7 @@ async def test_heritage_nhle_success():
         assert result["listed_buildings_within_500m"] == 1
         assert result["nearest_listed"]["name"] == "Test Building"
         assert result["nearest_listed"]["grade"] == "II"
+        assert result["nearest_listed"]["distance_m"] < 5  # same point: proves coordinates were read
 
 
 @pytest.mark.asyncio
@@ -329,3 +330,23 @@ async def test_heritage_nhle_all_features_no_geometry():
         assert result["status"] == "failed"
         assert result["source"] == "historic_england_nhle"
         assert "usable geometry" in result["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_heritage_unexpected_coordinate_system_fails():
+    mock_resp = MagicMock()
+    mock_resp.is_success = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "spatialReference": {"wkid": 27700},
+        "features": [{"attributes": {"Name": "X", "Grade": "II"},
+                      "geometry": {"points": [[383388.7, 144429.4]]}}],
+    }
+    with patch("enrichment.httpx.AsyncClient") as MockClient:
+        instance = AsyncMock()
+        instance.get = AsyncMock(return_value=mock_resp)
+        MockClient.return_value.__aenter__ = AsyncMock(return_value=instance)
+        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+        result = await get_heritage_data(53.4803, -2.2428)
+        assert result["status"] == "failed"
+        assert "coordinate system" in result["reason"].lower()

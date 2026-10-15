@@ -15,6 +15,7 @@ import os
 import base64
 import re
 import math
+import logging
 from typing import Optional, Dict, Any
 
 
@@ -224,6 +225,23 @@ async def get_epc_data(postcode: str) -> Dict[str, Any]:
 # Free, no API key, ArcGIS Open Data Hub
 # ============================================================================
 
+def _feature_lng_lat(geom):
+    """Return (lng, lat) from an ArcGIS geometry, or None if unusable.
+    The NHLE layer is esriGeometryMultipoint ({"points": [[lng, lat], ...]});
+    plain point geometry ({"x": lng, "y": lat}) is also accepted."""
+    if not geom:
+        return None
+    try:
+        pts = geom.get("points")
+        if pts:
+            return float(pts[0][0]), float(pts[0][1])
+        if geom.get("x") is not None and geom.get("y") is not None:
+            return float(geom["x"]), float(geom["y"])
+    except (TypeError, ValueError, IndexError):
+        return None
+    return None
+
+
 async def get_heritage_data(lat: float, lng: float, radius_m: int = 500) -> Dict[str, Any]:
     """
     Query Historic England's listed buildings dataset by coordinates.
@@ -269,44 +287,16 @@ async def get_heritage_data(lat: float, lng: float, radius_m: int = 500) -> Dict
             data = response.json()
             features = data.get("features", [])
 
-            if features:
-                nearest = None
-                nearest_distance = float('inf')
+            # We request outSR=4326, so coordinates must come back as lng/lat.
+            # Refuse to guess if the service answers in a different system.
+            wkid = (data.get("spatialReference") or {}).get("wkid")
+            if features and wkid is not None and wkid != 4326:
+                return _failed_result(
+                    "historic_england_nhle",
+                    f"Unexpected coordinate system wkid={wkid} (expected 4326)"
+                )
 
-                for feature in features:
-                    attrs = feature.get("attributes", {})
-                    geom = feature.get("geometry", {})
-
-                    if geom:
-                        f_lat = geom.get("y", 0)
-                        f_lng = geom.get("x", 0)
-                        dist = _haversine(lat, lng, f_lat, f_lng)
-
-                        if dist < nearest_distance:
-                            nearest_distance = dist
-                            nearest = attrs
-
-                listed_buildings = []
-                for f in features[:5]:
-                    a = f.get("attributes", {})
-                    listed_buildings.append({
-                        "name": a.get("Name", "Unknown"),
-                        "grade": a.get("Grade", "Unknown"),
-                    })
-
-                return {
-                    "status": "ok",
-                    "listed_building_on_site": nearest_distance < 50,
-                    "listed_buildings_within_500m": len(features),
-                    "nearest_listed": {
-                        "name": nearest.get("Name", "Unknown") if nearest else None,
-                        "grade": nearest.get("Grade", "Unknown") if nearest else None,
-                        "distance_m": round(nearest_distance),
-                    } if nearest else None,
-                    "listed_buildings_nearby": listed_buildings,
-                    "source": "historic_england_nhle",
-                }
-            else:
+            if not features:
                 return {
                     "status": "ok",
                     "listed_building_on_site": False,
@@ -316,6 +306,47 @@ async def get_heritage_data(lat: float, lng: float, radius_m: int = 500) -> Dict
                     "source": "historic_england_nhle",
                     "note": f"No listed buildings within {radius_m}m"
                 }
+
+            nearest = None
+            nearest_distance = float('inf')
+
+            for feature in features:
+                attrs = feature.get("attributes", {})
+                coords = _feature_lng_lat(feature.get("geometry"))
+                if coords is None:
+                    continue  # never default to 0,0
+                f_lng, f_lat = coords
+                dist = _haversine(lat, lng, f_lat, f_lng)
+                if dist < nearest_distance:
+                    nearest_distance = dist
+                    nearest = attrs
+
+            if nearest is None:
+                return _failed_result(
+                    "historic_england_nhle",
+                    "Listed buildings returned but none had usable geometry"
+                )
+
+            listed_buildings = []
+            for f in features[:5]:
+                a = f.get("attributes", {})
+                listed_buildings.append({
+                    "name": a.get("Name", "Unknown"),
+                    "grade": a.get("Grade", "Unknown"),
+                })
+
+            return {
+                "status": "ok",
+                "listed_building_on_site": nearest_distance < 50,
+                "listed_buildings_within_500m": len(features),
+                "nearest_listed": {
+                    "name": nearest.get("Name", "Unknown") if nearest else None,
+                    "grade": nearest.get("Grade", "Unknown") if nearest else None,
+                    "distance_m": round(nearest_distance),
+                } if nearest else None,
+                "listed_buildings_nearby": listed_buildings,
+                "source": "historic_england_nhle",
+            }
 
     except Exception as e:
         return _failed_result("historic_england_nhle", str(e))
