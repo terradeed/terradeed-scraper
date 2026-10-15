@@ -49,8 +49,17 @@ EXTRACT_MODEL = "claude-sonnet-4-6"
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
-if len(ADMIN_SECRET) < 32:
-    raise RuntimeError("ADMIN_SECRET must be set to a 32+ character value")
+
+
+def _admin_secret_ok() -> bool:
+    return len(ADMIN_SECRET) >= 32
+
+
+if not _admin_secret_ok():
+    logging.warning(
+        "ADMIN_SECRET is not set or is shorter than 32 characters. "
+        "Admin routes (/admin/*) are disabled and will return HTTP 503."
+    )
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./terradeed.db")
 DB_PATH = DATABASE_URL.replace("sqlite:///", "") if DATABASE_URL.startswith("sqlite://") else "./terradeed.db"
 logging.warning("Database path: %s. Data will be lost on every redeploy unless a persistent volume is mounted at this path.", DB_PATH)
@@ -612,6 +621,7 @@ class PropertyExtractRequest(BaseModel):
 class CreateKeyRequest(BaseModel):
     credits: int = 100
     rate_limit: int = 60
+    admin_secret: Optional[str] = None  # Deprecated: use x-admin-secret header instead
 
 # Scraping Functions
 def _fetch_static(url: str) -> tuple[str, None]:
@@ -1445,30 +1455,58 @@ async def well_known_llms_txt():
 @app.post("/admin/keys")
 async def create_key(request: CreateKeyRequest, http_request: Request):
     """Create a new API key (admin only)"""
+    if not _admin_secret_ok():
+        raise HTTPException(
+            status_code=503,
+            detail="Admin routes are disabled because ADMIN_SECRET is not configured"
+        )
+
     admin_secret = http_request.headers.get("x-admin-secret", "")
-    if not secrets.compare_digest(admin_secret.encode(), ADMIN_SECRET.encode()):
+    warnings = []
+
+    if not admin_secret:
+        # Deprecated: fall back to body field for backward compatibility
+        body_secret = request.model_dump().get("admin_secret", "")
+        if body_secret:
+            warnings.append(
+                "Deprecation warning: admin_secret in request body is deprecated. "
+                "Use the x-admin-secret header instead."
+            )
+            admin_secret = body_secret
+
+    if not admin_secret or not secrets.compare_digest(admin_secret.encode(), ADMIN_SECRET.encode()):
         raise HTTPException(status_code=401, detail="Invalid admin secret")
-    
+
     # Generate new key
     key = f"td_sk_{secrets.token_urlsafe(32)}"
     key_hash = hash_key(key)
     key_prefix = get_key_prefix(key)
     timestamp = datetime.now(timezone.utc).isoformat()
-    
+
     with get_db() as conn:
         conn.execute(
             "INSERT INTO api_keys (key_hash, key_prefix, credits_remaining, created_at) VALUES (?, ?, ?, ?)",
             (key_hash, key_prefix, request.credits, timestamp)
         )
         conn.commit()
-    
-    return {"api_key": key, "credits": request.credits, "created_at": timestamp}
+
+    response = {"api_key": key, "credits": request.credits, "created_at": timestamp}
+    if warnings:
+        response["warnings"] = warnings
+    return response
+
 
 @app.get("/admin/keys/{key_prefix}")
 async def get_key_status(key_prefix: str, request: Request):
     """Get API key status (admin only)"""
+    if not _admin_secret_ok():
+        raise HTTPException(
+            status_code=503,
+            detail="Admin routes are disabled because ADMIN_SECRET is not configured"
+        )
+
     admin_secret = request.headers.get("x-admin-secret", "")
-    if not secrets.compare_digest(admin_secret.encode(), ADMIN_SECRET.encode()):
+    if not admin_secret or not secrets.compare_digest(admin_secret.encode(), ADMIN_SECRET.encode()):
         raise HTTPException(status_code=401, detail="Invalid admin secret")
     
     with get_db() as conn:
