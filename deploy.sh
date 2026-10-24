@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Deploy TerraDeed Scrape API with API key support to Railway
+# Deploy Terradeed Scrape API with API key support to Railway
 #
 
 set -e
