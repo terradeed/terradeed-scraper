@@ -1,4 +1,4 @@
-# TerraDeed Scrape API
+# Terradeed Scrape API
 
 Pay-per-use web scraping and structured data extraction for AI agents. No API keys. No subscriptions. Agents pay and go.
 

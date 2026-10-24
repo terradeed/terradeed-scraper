@@ -1,4 +1,4 @@
-# TerraDeed API — Quick Reference
+# Terradeed API — Quick Reference
 
 ## Test Key
 Set `TERRADEED_TEST_KEY` environment variable to a key created via the admin endpoint.

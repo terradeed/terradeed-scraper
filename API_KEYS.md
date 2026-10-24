@@ -1,4 +1,4 @@
-# TerraDeed Scrape API — API Key Authentication
+# Terradeed Scrape API — API Key Authentication
 
 **New in v0.7.0**: You can now use prepaid API keys to access `/scrape` and `/extract` endpoints without setting up USDC payments.
 

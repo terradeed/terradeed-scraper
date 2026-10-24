@@ -1,4 +1,4 @@
-# TerraDeed Scrape API v0.7.0 — Implementation Summary
+# Terradeed Scrape API v0.7.0 — Implementation Summary
 
 ## What Was Built
 
