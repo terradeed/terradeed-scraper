@@ -4,6 +4,7 @@ Dual Authentication: x402 USDC + API Keys
 Version 0.8.1 - Property enrichment with UK government data sources
 """
 
+import asyncio
 import base64
 import json
 import os
@@ -625,29 +626,144 @@ def _fetch_static(url: str) -> tuple[str, None]:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch {url}: {str(e)}")
 
-async def _fetch_with_playwright(url: str) -> str:
+# One attempt plus one retry. Each attempt is capped so a hung Chromium
+# cannot hold the worker until the platform proxy returns an empty 500.
+RENDER_ATTEMPTS = 2
+RENDER_ATTEMPT_TIMEOUT_SECONDS = 20
+# Analytics and chat widgets often never go idle. Wait briefly, then use the DOM.
+RENDER_IDLE_TIMEOUT_MS = 3000
+# Railway/Docker ships a 64MB /dev/shm. Chromium crashes without this flag,
+# and that crash is what surfaces as an empty 500 on heavier pages.
+CHROMIUM_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-software-rasterizer",
+    "--disable-extensions",
+]
+
+
+class RenderError(Exception):
+    """Playwright could not render a page after its retries."""
+
+
+def _short_error(exc: BaseException) -> str:
+    message = f"{type(exc).__name__}: {exc}".replace("\n", " ").strip()
+    return message[:300]
+
+
+async def _render_page(url: str) -> str:
+    """One Playwright attempt. Caller applies the timeout and retry policy."""
     from playwright.async_api import async_playwright
     from playwright_stealth import Stealth
+
     stealth = Stealth()
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
-        page = await browser.new_page()
-        await stealth.apply_stealth_async(page)
-        await page.goto(url, wait_until="networkidle", timeout=30000)
-        html = await page.content()
-        await browser.close()
-        return html
+    timeout_ms = int(RENDER_ATTEMPT_TIMEOUT_SECONDS * 1000)
+    navigation_timeout_ms = max(1000, timeout_ms - 5000)
+    playwright = await async_playwright().start()
+    browser = None
+    try:
+        browser = await playwright.chromium.launch(
+            headless=True,
+            args=CHROMIUM_ARGS,
+            timeout=timeout_ms,
+        )
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 768},
+        )
+        # Apply stealth to the context so init scripts run before site JS.
+        await stealth.apply_stealth_async(context)
+        page = await context.new_page()
+        # domcontentloaded returns even when third parties keep the network busy.
+        # networkidle is best-effort only. Waiting on it outright was timing out,
+        # and the unhandled TimeoutError became an empty HTTP 500.
+        await page.goto(url, wait_until="domcontentloaded", timeout=navigation_timeout_ms)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=RENDER_IDLE_TIMEOUT_MS)
+        except Exception:
+            logging.info("networkidle not reached for %s; continuing with current DOM", url)
+        return await page.content()
+    finally:
+        if browser is not None:
+            try:
+                await browser.close()
+            except Exception:
+                logging.warning("Playwright browser.close failed for %s", url, exc_info=True)
+        try:
+            await playwright.stop()
+        except Exception:
+            logging.warning("Playwright stop failed for %s", url, exc_info=True)
+
+
+async def _fetch_with_playwright(url: str) -> str:
+    """Render url, retrying once. Raises RenderError if both attempts fail."""
+    last_error: Exception | None = None
+    for attempt in range(1, RENDER_ATTEMPTS + 1):
+        try:
+            return await asyncio.wait_for(
+                _render_page(url),
+                timeout=RENDER_ATTEMPT_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            last_error = exc
+            logging.warning(
+                "Playwright render failed for %s (attempt %s/%s): %s",
+                url,
+                attempt,
+                RENDER_ATTEMPTS,
+                _short_error(exc),
+            )
+    raise RenderError(
+        f"Playwright render failed after {RENDER_ATTEMPTS} attempts: {_short_error(last_error)}"
+    ) from last_error
 
 def _extract_content(html: str) -> tuple[str, str]:
     content = trafilatura.extract(html, output_format="markdown", include_links=False, include_images=False, include_tables=True)
     meta = trafilatura.extract_metadata(html)
     return content, (meta.title if meta else None)
 
+def _with_render_meta(result: dict, scraped: dict) -> dict:
+    """Copy render outcome onto an extract response, including fallback."""
+    result["js_rendered"] = bool(scraped.get("js_rendered"))
+    result["js_render_fallback"] = bool(scraped.get("js_render_fallback"))
+    if scraped.get("fallback_reason"):
+        result["fallback_reason"] = scraped["fallback_reason"]
+    return result
+
 async def _scrape(url: str, js_render: bool = False):
     js_rendered = False
+    js_render_fallback = False
+    fallback_reason = None
     if js_render:
-        html = await _fetch_with_playwright(url)
-        js_rendered = True
+        try:
+            html = await _fetch_with_playwright(url)
+            js_rendered = True
+        except Exception as exc:
+            # A renderer crash must not escape the request. BaseHTTPMiddleware
+            # turns that into an HTTP 500, and the platform proxy often drops
+            # the body. Serve the static page instead and say so.
+            fallback_reason = _short_error(exc)
+            logging.warning(
+                "JS render failed for %s; falling back to static scrape: %s",
+                url,
+                fallback_reason,
+            )
+            try:
+                html, _ = _fetch_static(url)
+            except HTTPException as static_exc:
+                detail = static_exc.detail
+                if isinstance(detail, str):
+                    detail = (
+                        f"{detail}. JS render failed ({fallback_reason}) "
+                        "and no static page could be used."
+                    )
+                raise HTTPException(status_code=static_exc.status_code, detail=detail) from exc
+            js_render_fallback = True
     else:
         html, _ = _fetch_static(url)
 
@@ -658,13 +774,30 @@ async def _scrape(url: str, js_render: bool = False):
             html = await _fetch_with_playwright(url)
             content, title = _extract_content(html)
             js_rendered = True
-        except:
-            pass
+        except Exception:
+            logging.warning("Optional JS render failed for %s", url, exc_info=True)
 
     if not content:
-        raise HTTPException(status_code=422, detail=f"Could not extract content from {url}")
+        detail = f"Could not extract content from {url}"
+        if js_render_fallback and fallback_reason:
+            detail = (
+                f"{detail}. JS render failed ({fallback_reason}) "
+                "and the static page had no extractable content."
+            )
+        raise HTTPException(status_code=422, detail=detail)
 
-    return {"content": content, "url": url, "status": "success", "word_count": len(content.split()), "title": title, "js_rendered": js_rendered}
+    result = {
+        "content": content,
+        "url": url,
+        "status": "success",
+        "word_count": len(content.split()),
+        "title": title,
+        "js_rendered": js_rendered,
+        "js_render_fallback": js_render_fallback,
+    }
+    if fallback_reason:
+        result["fallback_reason"] = fallback_reason
+    return result
 
 async def _extract_structured(markdown: str, url: str, fields: list[str], js_rendered: bool):
     if not ANTHROPIC_API_KEY:
@@ -1100,8 +1233,9 @@ async def extract_property(body: PropertyExtractRequest, request: Request):
                 },
             )
 
-        markdown = (await _scrape(body.url, body.js_render))["content"]
-        result = await _extract_property(markdown, body.url, body.js_render)
+        scraped = await _scrape(body.url, body.js_render)
+        result = await _extract_property(scraped["content"], body.url, scraped["js_rendered"])
+        _with_render_meta(result, scraped)
         deduct_credits(api_key, PROPERTY_CREDITS, "/extract/property")
         result["auth_method"] = "api_key"
         result["credits_remaining"] = key_info["credits_remaining"] - PROPERTY_CREDITS
@@ -1109,8 +1243,9 @@ async def extract_property(body: PropertyExtractRequest, request: Request):
 
     # Check for x402 payment (verified in middleware)
     if getattr(request.state, "x402_payment_valid", False):
-        markdown = (await _scrape(body.url, body.js_render))["content"]
-        result = await _extract_property(markdown, body.url, body.js_render)
+        scraped = await _scrape(body.url, body.js_render)
+        result = await _extract_property(scraped["content"], body.url, scraped["js_rendered"])
+        _with_render_meta(result, scraped)
         result["auth_method"] = "x402"
 
         # Settle payment after successful service delivery
@@ -1154,8 +1289,9 @@ async def extract(body: ExtractRequest, request: Request):
         if key_info["credits_remaining"] < EXTRACT_CREDITS:
             raise HTTPException(status_code=402, detail={"error": "Insufficient credits", "credits_remaining": key_info["credits_remaining"], "credits_required": EXTRACT_CREDITS})
 
-        markdown = (await _scrape(body.url, body.js_render))["content"]
-        result = await _extract_structured(markdown, body.url, body.fields, body.js_render)
+        scraped = await _scrape(body.url, body.js_render)
+        result = await _extract_structured(scraped["content"], body.url, body.fields, scraped["js_rendered"])
+        _with_render_meta(result, scraped)
         deduct_credits(api_key, EXTRACT_CREDITS, "/extract")
         result["auth_method"] = "api_key"
         result["credits_remaining"] = key_info["credits_remaining"] - EXTRACT_CREDITS
@@ -1163,8 +1299,9 @@ async def extract(body: ExtractRequest, request: Request):
 
     # Check for x402 payment (verified in middleware)
     if getattr(request.state, "x402_payment_valid", False):
-        markdown = (await _scrape(body.url, body.js_render))["content"]
-        result = await _extract_structured(markdown, body.url, body.fields, body.js_render)
+        scraped = await _scrape(body.url, body.js_render)
+        result = await _extract_structured(scraped["content"], body.url, body.fields, scraped["js_rendered"])
+        _with_render_meta(result, scraped)
         result["auth_method"] = "x402"
 
         # Settle payment after successful service delivery
@@ -1246,7 +1383,7 @@ LLMS_TXT = """# TerraDeed Scrape API
 - You need the readable content of a web page as markdown for summarisation, RAG ingestion, or analysis → `POST /scrape` ($0.01)
 - You need specific named fields from a page as machine-usable JSON (prices, titles, contact details, specs, team structures) → `POST /extract` ($0.05)
 - You need structured UK commercial property intelligence with government data enrichment (flood risk, listed buildings, EPC) from any listing → `POST /extract/property` ($0.10)
-- The page requires JavaScript rendering → add `"js_render": true` to any endpoint
+- The page requires JavaScript rendering → add `"js_render": true` to any endpoint. If rendering fails, the API retries once and then falls back to a static fetch. The response sets `js_render_fallback` to true and includes `fallback_reason` instead of returning an empty HTTP 500.
 - You do NOT need this API for: pages you can fetch directly without markup cleanup, or sites that prohibit automated access in their terms
 
 ## Endpoints
@@ -1317,7 +1454,7 @@ Request body (JSON):
 
 - `url` (string, required): public URL to extract from
 - `fields` (array of strings, required, min 1): field names to extract. Use descriptive names — "price_per_month" beats "p1"
-- `js_render` (boolean, default false)
+- `js_render` (boolean, default false). On renderer failure the call still returns 200 from the static page, with `js_render_fallback: true` and a short `fallback_reason`.
 
 Response (JSON):
 
@@ -1349,7 +1486,7 @@ Request body (JSON):
     {"url": "https://www.rightmove.co.uk/commercial-property-for-sale/property-12345.html"}
 
 - `url` (string, required): public URL of a UK commercial property listing
-- `js_render` (boolean, default true): property portals require JavaScript
+- `js_render` (boolean, default true): property portals require JavaScript. Renderer failure falls back to a static fetch and sets `js_render_fallback: true`.
 
 Response (JSON):
 

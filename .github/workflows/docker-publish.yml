@@ -22,10 +22,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install trafilatura==2.3.1 httpx==0.28.1 -c constraints.txt
-          pip install pytest pytest-asyncio==1.4.0
+          pip install -c constraints.txt -r requirements.txt -r requirements-dev.txt
 
       - name: Run tests
+        env:
+          ADMIN_SECRET: test-admin-secret-must-be-32-characters-long
         run: pytest tests/
 
   build-and-push:
