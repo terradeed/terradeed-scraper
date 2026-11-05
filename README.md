@@ -12,14 +12,31 @@ Pay-per-use web scraping and structured data extraction for AI agents. No API ke
 |----------|-------|--------|
 | `POST /scrape` | $0.01 USDC | Clean LLM-ready markdown from any URL |
 | `POST /extract` | $0.05 USDC | Schema-driven structured JSON — pass fields, receive typed values |
+| `GET /v1/uk/tenders` | $0.02 USDC | UK public tender notices (Find a Tender + Contracts Finder), up to 25 results |
+| `GET /v1/uk/grants` | free | v1 placeholder. Innovate UK text is not republished yet |
 
-Both endpoints support static scraping and JS rendering via Playwright for SPAs and dynamic sites.
+`/scrape` and `/extract` support static scraping and JS rendering via Playwright for SPAs and dynamic sites.
+
+### GET /v1/uk/tenders
+
+$0.02 USDC per search, maximum 25 notices. Data is the public Find a Tender and Contracts Finder OCDS feeds under the Open Government Licence v3.0. The JSON body includes `licence`, `attribution`, and `sources`. Contact names, emails, and telephone numbers are removed before the response is returned.
+
+| Query | Description |
+|-------|-------------|
+| `q` | Words matched against title, buyer, and description. Description text is not returned. |
+| `region` | `uk` (default), `england`, `scotland`, `wales`, `northern-ireland`, or an English region such as `north-west`. Hints are approximate. |
+| `updated_from` | `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS`. Defaults to the last 30 days. |
+| `stage` | `planning`, `tender`, or `award`. |
+| `limit` | 1–25. Default 25. |
+| `cursor` | `next_cursor` from the previous page. Repeat the same `q`, `region`, `updated_from`, and `stage`. |
+
+`GET /v1/uk/grants` is free and does not republish Innovate UK or Chest text in v1.
 
 ---
 
 ## Payment
 
-This API uses the [x402 protocol](https://x402.org) for autonomous micropayments. Your client sends a standard HTTP request, receives a `402 Payment Required` response with payment details, pays $0.01–$0.05 USDC on Base mainnet, and retries. The x402 SDK handles this automatically.
+This API uses the [x402 protocol](https://x402.org) for autonomous micropayments. Your client sends a standard HTTP request, receives a `402 Payment Required` response with payment details, pays $0.01–$0.10 USDC on Base mainnet, and retries. The x402 SDK handles this automatically.
 
 - **Network:** Base mainnet (`eip155:8453`)
 - **Asset:** USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)

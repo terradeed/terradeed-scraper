@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.8.1 - Property enrichment with UK government data sources
+Version 0.9.0 - UK public tenders feed (Find a Tender + Contracts Finder, OGL)
 """
 
 import base64
@@ -33,6 +33,7 @@ from x402.extensions.bazaar import (
 )
 
 from enrichment import enrich_property
+from uk_tenders import TenderQueryError, TenderService, TenderUpstreamError, grants_stub
 
 # Config
 PAY_TO = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
@@ -42,6 +43,9 @@ SCRAPE_CREDITS = 1
 EXTRACT_CREDITS = 5
 PROPERTY_PRICE = "$0.10"
 PROPERTY_CREDITS = 10
+TENDER_PRICE = "$0.02"
+TENDER_CREDITS = 2
+APP_VERSION = "0.9.0"
 NETWORK_CLIENT = "base"
 BASE_URL = "https://api.terradeed.co.uk"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
@@ -285,8 +289,8 @@ except Exception as e:
 # FastAPI App
 app = FastAPI(
     title="TerraDeed Scrape API",
-    description="x402-powered web data extraction for AI agents. Three endpoints: clean LLM-ready markdown (/scrape), structured JSON from any URL (/extract), and UK commercial property intelligence with government data enrichment (/extract/property). No accounts, no subscriptions — pay per call with USDC on Base mainnet.",
-    version="0.8.2",
+    description="x402-powered web data for AI agents. Clean LLM-ready markdown (/scrape), structured JSON from any URL (/extract), UK commercial property intelligence (/extract/property), and UK public tender notices from Find a Tender and Contracts Finder (/v1/uk/tenders). No accounts, no subscriptions — pay per call with USDC on Base mainnet.",
+    version=APP_VERSION,
     contact={
         "name": "TerraDeed Labs",
         "email": "contact@terradeed.co.uk",
@@ -594,6 +598,100 @@ PROPERTY_BAZAAR_EXT = {
         },
     }
 }
+
+TENDER_RESOURCE = {
+    "url": f"{BASE_URL}/v1/uk/tenders",
+    "description": "UK public tender notices from Find a Tender and Contracts Finder. Search by keyword, region, stage, and update time. Up to 25 notices per call. Open Government Licence v3.0. Contact names, emails, and phone numbers are omitted.",
+    "mimeType": "application/json",
+}
+
+TENDER_REQUIREMENTS = {
+    "scheme": "exact",
+    "network": "eip155:8453",
+    "asset": USDC_BASE,
+    "amount": "20000",  # $0.02 in atomic units
+    "payTo": PAY_TO,
+    "maxTimeoutSeconds": 300,
+    "extra": {"name": "USD Coin", "version": "2"},
+}
+
+TENDER_BAZAAR_EXT = {
+    "bazaar": {
+        "info": {
+            "input": {
+                "type": "http",
+                "method": "GET",
+                "queryParams": {
+                    "q": "AI training",
+                    "region": "north-west",
+                    "updated_from": "2026-11-01",
+                    "stage": "tender",
+                    "limit": 25,
+                },
+            },
+            "output": {
+                "type": "json",
+                "example": {
+                    "licence": "OGL-UK-3.0",
+                    "attribution": "Contains public sector information licensed under the Open Government Licence v3.0.",
+                    "licence_url": "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
+                    "sources": ["find-tender", "contracts-finder"],
+                    "results": [
+                        {
+                            "ocid": "ocds-h6vhtk-000000",
+                            "title": "AI training services",
+                            "buyer": "Example Council",
+                            "value_gbp": 100000,
+                            "published": "2026-11-03T12:00:00Z",
+                            "deadline": "2026-12-01T12:00:00Z",
+                            "stage": "tender",
+                            "region_hints": ["north-west"],
+                            "url": "https://www.find-tender.service.gov.uk/Notice/000001-2026",
+                            "source": "find-tender",
+                        }
+                    ],
+                    "next_cursor": None,
+                    "auth_method": "x402",
+                },
+            },
+        },
+        "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "http"},
+                        "method": {"type": "string", "enum": ["GET", "HEAD", "DELETE"]},
+                        "queryParams": {
+                            "type": "object",
+                            "properties": {
+                                "q": {"type": "string"},
+                                "region": {"type": "string"},
+                                "updated_from": {"type": "string"},
+                                "stage": {"type": "string", "enum": ["tender", "award", "planning"]},
+                                "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                                "cursor": {"type": "string"},
+                            },
+                        },
+                    },
+                    "required": ["type", "method"],
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "example": {"type": "object"},
+                    },
+                },
+            },
+            "required": ["input"],
+        },
+    }
+}
+
+tender_service = TenderService()
 
 # Models
 class ScrapeRequest(BaseModel):
@@ -927,37 +1025,42 @@ def payment_required_response(requirements: dict, resource: dict, bazaar_ext: di
         content={"error": "Payment required"},
     )
 
+def _payment_for(path: str):
+    """x402 price, resource, and bazaar metadata for a paid path."""
+    if path == "/scrape":
+        return SCRAPE_REQUIREMENTS, SCRAPE_RESOURCE, SCRAPE_BAZAAR_EXT
+    if path == "/extract/property":
+        return PROPERTY_REQUIREMENTS, PROPERTY_RESOURCE, PROPERTY_BAZAAR_EXT
+    if path == "/extract":
+        return EXTRACT_REQUIREMENTS, EXTRACT_RESOURCE, EXTRACT_BAZAAR_EXT
+    if path == "/v1/uk/tenders":
+        return TENDER_REQUIREMENTS, TENDER_RESOURCE, TENDER_BAZAAR_EXT
+    return None
+
+
+PAID_ROUTES = {
+    ("POST", "/scrape"),
+    ("POST", "/extract"),
+    ("POST", "/extract/property"),
+    ("GET", "/v1/uk/tenders"),
+}
+
+
 # Middleware: x402 auth check BEFORE Pydantic validation
 @app.middleware("http")
 async def x402_auth_middleware(request: Request, call_next):
     """
-    Intercept POST /scrape and POST /extract to check auth before Pydantic validation.
+    Intercept paid routes to check auth before Pydantic validation.
     Returns 402 immediately if no valid auth present, avoiding 422 validation errors.
     """
-    if request.method == "POST" and request.url.path in ["/scrape", "/extract", "/extract/property"]:
+    if (request.method, request.url.path) in PAID_ROUTES:
+        requirements_dict, resource, bazaar_ext = _payment_for(request.url.path)
         auth_method, api_key = await get_auth_method(request)
-        
+
         # If no auth provided, return 402 before validation runs
         if auth_method == "none":
-            if request.url.path == "/scrape":
-                return payment_required_response(
-                    SCRAPE_REQUIREMENTS,
-                    SCRAPE_RESOURCE,
-                    SCRAPE_BAZAAR_EXT
-                )
-            elif request.url.path == "/extract/property":
-                return payment_required_response(
-                    PROPERTY_REQUIREMENTS,
-                    PROPERTY_RESOURCE,
-                    PROPERTY_BAZAAR_EXT
-                )
-            else:
-                return payment_required_response(
-                    EXTRACT_REQUIREMENTS,
-                    EXTRACT_RESOURCE,
-                    EXTRACT_BAZAAR_EXT
-                )
-        
+            return payment_required_response(requirements_dict, resource, bazaar_ext)
+
         # If x402 payment signature present, verify it using x402ResourceServer
         if auth_method == "x402":
             payment_sig = request.headers.get("payment-signature") or request.headers.get("PAYMENT-SIGNATURE")
@@ -965,18 +1068,13 @@ async def x402_auth_middleware(request: Request, call_next):
                 try:
                     import base64
                     from x402 import parse_payment_payload, PaymentRequirements
-                    
+
                     # Decode base64 header, then parse into PaymentPayload
                     decoded_bytes = base64.b64decode(payment_sig)
                     payload = parse_payment_payload(decoded_bytes)
-                    
+
                     # Build proper PaymentRequirements with EIP-712 domain info
-                    if request.url.path == "/scrape":
-                        req_dict = SCRAPE_REQUIREMENTS
-                    elif request.url.path == "/extract/property":
-                        req_dict = PROPERTY_REQUIREMENTS
-                    else:
-                        req_dict = EXTRACT_REQUIREMENTS
+                    req_dict = requirements_dict
                     requirements = PaymentRequirements(
                         scheme=req_dict["scheme"],
                         network=req_dict["network"],
@@ -1197,16 +1295,128 @@ async def extract(body: ExtractRequest, request: Request):
     # No valid auth
     return payment_required_response(EXTRACT_REQUIREMENTS, EXTRACT_RESOURCE, EXTRACT_BAZAAR_EXT)
 
+@app.get("/v1/uk/tenders")
+async def uk_tenders(
+    request: Request,
+    q: Optional[str] = None,
+    region: Optional[str] = None,
+    updated_from: Optional[str] = None,
+    stage: Optional[str] = None,
+    limit: int = 25,
+    cursor: Optional[str] = None,
+):
+    """Search UK public tender notices from Find a Tender and Contracts Finder.
+
+    $0.02 USDC per search, up to 25 results. Notice data is published under the
+    Open Government Licence v3.0. Contact names, emails, and telephone numbers
+    are omitted. Pass next_cursor back with the same q, region, updated_from,
+    and stage to read the next page of a cached search.
+    """
+    auth_method, api_key = await get_auth_method(request)
+    paid_x402 = getattr(request.state, "x402_payment_valid", False)
+
+    key_info = None
+    if auth_method == "api_key":
+        key_info = validate_api_key(api_key)
+        if not key_info:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        if "error" in key_info:
+            raise HTTPException(status_code=401, detail=key_info["error"])
+        if key_info["credits_remaining"] < TENDER_CREDITS:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "Insufficient credits",
+                    "credits_remaining": key_info["credits_remaining"],
+                    "credits_required": TENDER_CREDITS,
+                },
+            )
+    elif not paid_x402:
+        return payment_required_response(
+            TENDER_REQUIREMENTS, TENDER_RESOURCE, TENDER_BAZAAR_EXT
+        )
+
+    try:
+        result = await tender_service.search(
+            q=q,
+            region=region,
+            updated_from=updated_from,
+            stage=stage,
+            limit=limit,
+            cursor=cursor,
+        )
+    except TenderQueryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except TenderUpstreamError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if auth_method == "api_key":
+        if not deduct_credits(api_key, TENDER_CREDITS, "/v1/uk/tenders"):
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "Insufficient credits",
+                    "credits_remaining": key_info["credits_remaining"],
+                    "credits_required": TENDER_CREDITS,
+                },
+            )
+        result["auth_method"] = "api_key"
+        result["credits_remaining"] = key_info["credits_remaining"] - TENDER_CREDITS
+        return result
+
+    result["auth_method"] = "x402"
+    payment_response_header = None
+    try:
+        payload = getattr(request.state, "x402_payload", None)
+        requirements = getattr(request.state, "x402_requirements", None)
+        if payload and requirements:
+            settle_result = await x402_server.settle_payment(
+                payload=payload,
+                requirements=requirements,
+            )
+            if os.environ.get("DEBUG_SETTLE"):
+                print(
+                    "[DEBUG_SETTLE] /v1/uk/tenders settle_result: "
+                    + json.dumps(settle_result, default=str, indent=2)
+                )
+            payment_response_header = base64.b64encode(
+                json.dumps(settle_result, default=str).encode()
+            ).decode()
+    except Exception as exc:
+        print(f"Payment settlement warning: {exc}")
+        if os.environ.get("DEBUG_SETTLE"):
+            import traceback
+            traceback.print_exc()
+
+    if payment_response_header:
+        return JSONResponse(
+            content=result, headers={"PAYMENT-RESPONSE": payment_response_header}
+        )
+    return result
+
+
+@app.get("/v1/uk/grants")
+async def uk_grants(
+    q: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 25,
+):
+    """Free v1 placeholder. Innovate UK competition text is not republished."""
+    payload = grants_stub()
+    payload["query"] = {"q": q, "status": status, "limit": limit}
+    return payload
+
+
 @app.get("/health")
 async def health():
     """Health check endpoint"""
     facilitators = [XPAY_FACILITATOR]
     if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
         facilitators.append(CDP_FACILITATOR)
-    
+
     return {
         "status": "ok",
-        "version": "0.8.1",
+        "version": APP_VERSION,
         "facilitators": facilitators,
         "auth_methods": ["x402", "api_key"]
     }
@@ -1216,12 +1426,14 @@ async def root():
     """Root endpoint - redirects to docs"""
     return {
         "service": "TerraDeed Scrape API",
-        "version": "0.8.1",
+        "version": APP_VERSION,
         "documentation": "https://www.terradeed.co.uk/api",
         "endpoints": {
             "scrape": {"path": "/scrape", "method": "POST", "price": SCRAPE_PRICE, "auth": ["x402", "api_key"]},
             "extract": {"path": "/extract", "method": "POST", "price": EXTRACT_PRICE, "auth": ["x402", "api_key"]},
             "extract_property": {"path": "/extract/property", "method": "POST", "price": PROPERTY_PRICE, "auth": ["x402", "api_key"], "description": "UK commercial property intelligence. Attempts enrichment from government open data where available."},
+            "uk_tenders": {"path": "/v1/uk/tenders", "method": "GET", "price": TENDER_PRICE, "auth": ["x402", "api_key"], "description": "UK public tender notices from Find a Tender and Contracts Finder. OGL v3.0. Up to 25 results."},
+            "uk_grants": {"path": "/v1/uk/grants", "method": "GET", "price": "free", "auth": [], "description": "v1 placeholder. Innovate UK text is not republished yet."},
             "health": {"path": "/health", "method": "GET"}
         }
     }
@@ -1234,6 +1446,7 @@ LLMS_TXT = """# TerraDeed Scrape API
 > • `/scrape` — Clean, LLM-ready markdown from any URL. JavaScript rendering included. Feed web content directly into agent context without parsing HTML. $0.01 USDC.
 > • `/extract` — Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back with confidence scores. No scraper configuration needed. $0.05 USDC.
 > • `/extract/property` — UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available. $0.10 USDC.
+> • `/v1/uk/tenders` — UK public tender notices from the Find a Tender and Contracts Finder OCDS APIs. Keyword, region, stage, and updated-from filters. Up to 25 results. Open Government Licence v3.0. Contact names, emails, and phone numbers are omitted. $0.02 USDC.
 > 
 > No API keys, no accounts, no subscriptions — payment is per-request via the x402 protocol (HTTP 402) with USDC on Base mainnet. First byte to paid response in one retry cycle.
 
@@ -1404,6 +1617,23 @@ Response (JSON):
       "auth_method": "x402"
     }
 
+### GET /v1/uk/tenders — $0.02 USDC
+
+UK public tender notices from Find a Tender and Contracts Finder. One search returns up to 25 notices.
+
+Query parameters:
+
+- `q` (string): case-insensitive words matched against title, buyer, and description. The description itself is not returned.
+- `region` (string, default `uk`): `uk`, `england`, `scotland`, `wales`, `northern-ireland`, `north-west`, `north-east`, `yorkshire-and-the-humber`, `east-midlands`, `west-midlands`, `east-of-england`, `london`, `south-east`, `south-west`. Region hints are approximate (NUTS code, region name, or postcode area).
+- `updated_from` (string): `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS`. Defaults to 30 days before the search.
+- `stage` (string): `planning`, `tender`, or `award`.
+- `limit` (integer, default 25, max 25).
+- `cursor` (string): `next_cursor` from the previous response. Repeat the same `q`, `region`, `updated_from`, and `stage`.
+
+The response includes `licence` `OGL-UK-3.0` and the attribution line required for Open Government Licence reuse. Contact names, emails, and telephone numbers are removed.
+
+`GET /v1/uk/grants` is free and currently returns no competition text.
+
 ## Payment flow (x402 v2)
 
 1. POST to the endpoint with your JSON body and no payment. You receive HTTP 402. The full PaymentRequired object is base64-encoded in the `payment-required` response header (the body is a stub).
@@ -1507,7 +1737,7 @@ def custom_openapi():
         description=app.description,
         routes=app.routes,
     )
-    free_paths = ["/health", "/", "/admin/keys", "/admin/keys/{key_prefix}"]
+    free_paths = ["/health", "/", "/admin/keys", "/admin/keys/{key_prefix}", "/v1/uk/grants"]
     for path in free_paths:
         if path in openapi_schema.get("paths", {}):
             for method in openapi_schema["paths"][path]:
@@ -1525,6 +1755,14 @@ def custom_openapi():
                 if method == "post":
                     desc = openapi_schema["paths"][path][method].get("description", "")
                     openapi_schema["paths"][path][method]["description"] = f"{desc}\n\n**Price:** {price} USDC per call."
+    tender_path = "/v1/uk/tenders"
+    if tender_path in openapi_schema.get("paths", {}):
+        for method in openapi_schema["paths"][tender_path]:
+            if method == "get":
+                desc = openapi_schema["paths"][tender_path][method].get("description", "")
+                openapi_schema["paths"][tender_path][method]["description"] = (
+                    f"{desc}\n\n**Price:** {TENDER_PRICE} USDC per search (up to 25 results)."
+                )
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
