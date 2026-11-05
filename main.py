@@ -45,7 +45,7 @@ PROPERTY_CREDITS = 10
 NETWORK_CLIENT = "base"
 BASE_URL = "https://api.terradeed.co.uk"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-EXTRACT_MODEL = "claude-sonnet-4-6"
+EXTRACT_MODEL = "claude-sonnet-5-5"
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
