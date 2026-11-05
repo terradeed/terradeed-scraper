@@ -29,6 +29,14 @@
       "price": "0.10",
       "currency": "USDC",
       "network": "base"
+    },
+    {
+      "type": "http",
+      "url": "https://api.terradeed.co.uk/v1/uk/tenders",
+      "method": "GET",
+      "price": "0.02",
+      "currency": "USDC",
+      "network": "base"
     }
   ],
   "x402Support": true,
