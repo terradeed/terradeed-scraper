@@ -897,10 +897,20 @@ async def _scrape(url: str, js_render: bool = False):
         result["fallback_reason"] = fallback_reason
     return result
 
-async def _extract_structured(markdown: str, url: str, fields: list[str], js_rendered: bool):
-    if not ANTHROPIC_API_KEY:
+async def _extract_structured(
+    markdown: str,
+    url: str,
+    fields: list[str],
+    js_rendered: bool,
+    *,
+    model: str | None = None,
+):
+    """Extract named fields. ``model`` defaults to EXTRACT_MODEL and does not change it."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip() or ANTHROPIC_API_KEY
+    if not api_key:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY missing")
 
+    model_id = model or EXTRACT_MODEL
     fields_str = ", ".join(f'"{f}"' for f in fields)
     prompt = f"""Extract these fields: [{fields_str}]
 
@@ -915,13 +925,13 @@ Content:
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={
-                "x-api-key": ANTHROPIC_API_KEY,
+                "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
                 "anthropic-beta": "prompt-caching-2024-07-31",
             },
             json={
-                "model": EXTRACT_MODEL,
+                "model": model_id,
                 "max_tokens": 1024,
                 "system": [
                     {
@@ -949,7 +959,7 @@ Content:
     except:
         raise HTTPException(status_code=502, detail="Malformed JSON from model")
 
-    return {"url": url, "status": "success", "data": data, "fields_requested": fields, "fields_extracted": [k for k, v in data.items() if v is not None], "js_rendered": js_rendered, "model": EXTRACT_MODEL}
+    return {"url": url, "status": "success", "data": data, "fields_requested": fields, "fields_extracted": [k for k, v in data.items() if v is not None], "js_rendered": js_rendered, "model": model_id}
 
 PROPERTY_SYSTEM_PROMPT = """You are a commercial property data extraction specialist. Extract structured property listing data from the provided page content.
 
