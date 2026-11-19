@@ -169,13 +169,13 @@ The API automatically falls back to Playwright if static extraction returns empt
 ## Discovery
 
 ```
-GET https://api.terradeed.co.uk/.well-known/x402   # x402 v2 discovery
-GET https://api.terradeed.co.uk/bazaar.json         # Agentic Market manifest
+GET https://api.terradeed.co.uk/openapi.json        # Canonical discovery document
+GET https://api.terradeed.co.uk/.well-known/x402    # x402 v2 capability manifest
 GET https://api.terradeed.co.uk/health              # Health and capabilities
 GET https://api.terradeed.co.uk/docs                # Interactive API docs
 ```
 
-Indexed in the [Agentic Market catalogue](https://onyx-actions.onrender.com/bazaar), ID 58838. Discoverable via `mapper-mcp search_endpoints` with `terradeed` from any MCP client.
+`/openapi.json` and `/.well-known/x402` list the same paid routes and prices. Indexed in the [Agentic Market catalogue](https://onyx-actions.onrender.com/bazaar), ID 58838. Discoverable via `mapper-mcp search_endpoints` with `terradeed` from any MCP client.
 
 ---
 

@@ -1,4 +1,7 @@
 {
   "$schema": "https://glama.ai/mcp/schemas/server.json",
-  "maintainers": ["terradeed"]
+  "maintainers": ["terradeed"],
+  "name": "Terradeed Scrape API",
+  "description": "Pay-per-call web data for AI agents on Base. POST /scrape at $0.01, POST /extract at $0.05, POST /extract/property at $0.10, and GET /v1/uk/tenders at $0.02, in USDC via x402.",
+  "repository": "https://github.com/terradeed/terradeed-scraper"
 }
