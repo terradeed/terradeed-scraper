@@ -13,6 +13,7 @@ import secrets
 import hashlib
 import logging
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from typing import Any, Optional
 from contextlib import contextmanager
 
@@ -863,6 +864,100 @@ def _extract_content(html: str) -> tuple[str, str]:
     meta = trafilatura.extract_metadata(html)
     return content, (meta.title if meta else None)
 
+
+class _HeadMetaParser(HTMLParser):
+    """Read the document title and description tags trafilatura leaves out of the body."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._in_title = False
+        self._title_done = False
+        self._title_parts: list[str] = []
+        self.meta_description: str | None = None
+        self.og_title: str | None = None
+        self.og_description: str | None = None
+
+    def handle_starttag(self, tag, attrs):
+        name = tag.lower()
+        attr = {key.lower(): (value or "") for key, value in attrs if key}
+        if name == "title" and not self._title_done:
+            self._in_title = True
+            self._title_parts = []
+        if name != "meta":
+            return
+        content = attr.get("content", "").strip()
+        if not content:
+            return
+        meta_name = attr.get("name", "").strip().lower()
+        prop = attr.get("property", "").strip().lower()
+        if meta_name == "description" and self.meta_description is None:
+            self.meta_description = content
+        if "og:title" in (meta_name, prop) and self.og_title is None:
+            self.og_title = content
+        if "og:description" in (meta_name, prop) and self.og_description is None:
+            self.og_description = content
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "title" and self._in_title:
+            self._in_title = False
+            self._title_done = True
+
+    def handle_data(self, data):
+        if self._in_title:
+            self._title_parts.append(data)
+
+    @property
+    def title(self) -> str:
+        return " ".join("".join(self._title_parts).split())
+
+
+def _page_context(html: str) -> str:
+    """Labelled title and descriptions for the extractor.
+
+    Trafilatura's markdown omits ``<title>`` and meta descriptions, so a
+    field named title or description would otherwise come back null.
+    """
+    if not html:
+        return ""
+    parser = _HeadMetaParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:
+        logging.warning("Could not read page title or description", exc_info=True)
+        return ""
+    lines = []
+    if parser.title:
+        lines.append(f"Page title: {parser.title}")
+    if parser.meta_description:
+        lines.append(f"Meta description: {parser.meta_description}")
+    if parser.og_title:
+        lines.append(f"Open Graph title: {parser.og_title}")
+    if parser.og_description:
+        lines.append(f"Open Graph description: {parser.og_description}")
+    return "\n".join(lines)
+
+
+def _model_input(markdown: str, page_context: str, limit: int) -> str:
+    """Body text for the model, with page metadata first so the limit keeps it."""
+    body = markdown or ""
+    context = (page_context or "").strip()
+    if not context:
+        return body[:limit]
+    labelled = (
+        "Page metadata (not always repeated in the body text):\n"
+        f"{context}\n\n"
+        "Page content:\n"
+        f"{body}"
+    )
+    return labelled[:limit]
+
+
+def _hide_page_context(result: dict) -> dict:
+    """Drop extractor-only metadata before a scrape response is returned."""
+    result.pop("page_context", None)
+    return result
+
 def _with_render_meta(result: dict, scraped: dict) -> dict:
     """Copy render outcome onto an extract response, including fallback."""
     result["js_rendered"] = bool(scraped.get("js_rendered"))
@@ -904,11 +999,13 @@ async def _scrape(url: str, js_render: bool = False):
         html, _ = _fetch_static(url)
 
     content, title = _extract_content(html)
+    page_context = _page_context(html)
 
     if not content and not js_render:
         try:
             html = await _fetch_with_playwright(url)
             content, title = _extract_content(html)
+            page_context = _page_context(html)
             js_rendered = True
         except Exception:
             logging.warning("Optional JS render failed for %s", url, exc_info=True)
@@ -930,6 +1027,7 @@ async def _scrape(url: str, js_render: bool = False):
         "title": title,
         "js_rendered": js_rendered,
         "js_render_fallback": js_render_fallback,
+        "page_context": page_context,
     }
     if fallback_reason:
         result["fallback_reason"] = fallback_reason
@@ -989,6 +1087,7 @@ async def _extract_structured(
     js_rendered: bool,
     *,
     model: str | None = None,
+    page_context: str = "",
 ):
     """Extract named fields. ``model`` defaults to EXTRACT_MODEL and does not change it."""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip() or ANTHROPIC_API_KEY
@@ -1004,7 +1103,7 @@ Return ONLY valid JSON. Set missing fields to null.
 URL: {url}
 
 Content:
-{markdown[:8000]}"""
+{_model_input(markdown, page_context, 8000)}"""
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -1117,7 +1216,13 @@ Rules:
 - Keep description_summary to 2-3 sentences max — focus on key commercial features.
 - Return ONLY the JSON object. No markdown fences, no commentary."""
 
-async def _extract_property(markdown: str, url: str, js_rendered: bool):
+async def _extract_property(
+    markdown: str,
+    url: str,
+    js_rendered: bool,
+    *,
+    page_context: str = "",
+):
     """Extract structured property data using a fixed commercial property schema."""
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY missing")
@@ -1127,7 +1232,7 @@ async def _extract_property(markdown: str, url: str, js_rendered: bool):
 URL: {url}
 
 Content:
-{markdown[:12000]}"""
+{_model_input(markdown, page_context, 12000)}"""
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -1553,14 +1658,14 @@ async def scrape(body: ScrapeRequest, request: Request):
             raise HTTPException(status_code=402, detail={"error": "Insufficient credits", "credits_remaining": key_info["credits_remaining"], "credits_required": SCRAPE_CREDITS})
 
         _arm_credit_charge(request, api_key, key_info, SCRAPE_CREDITS)
-        result = await _scrape(body.url, body.js_render)
+        result = _hide_page_context(await _scrape(body.url, body.js_render))
         result["auth_method"] = "api_key"
         return result
 
     # x402 payment was verified in middleware. Settlement happens after this
     # returns, and only when the response is a usable success.
     if getattr(request.state, "x402_payment_valid", False):
-        result = await _scrape(body.url, body.js_render)
+        result = _hide_page_context(await _scrape(body.url, body.js_render))
         result["auth_method"] = "x402"
         return result
 
@@ -1594,7 +1699,12 @@ async def extract_property(body: PropertyExtractRequest, request: Request):
 
         _arm_credit_charge(request, api_key, key_info, PROPERTY_CREDITS)
         scraped = await _scrape(body.url, body.js_render)
-        result = await _extract_property(scraped["content"], body.url, scraped["js_rendered"])
+        result = await _extract_property(
+            scraped["content"],
+            body.url,
+            scraped["js_rendered"],
+            page_context=scraped.get("page_context") or "",
+        )
         _with_render_meta(result, scraped)
         result["auth_method"] = "api_key"
         return result
@@ -1602,7 +1712,12 @@ async def extract_property(body: PropertyExtractRequest, request: Request):
     # x402 payment was verified in middleware and is settled only on success.
     if getattr(request.state, "x402_payment_valid", False):
         scraped = await _scrape(body.url, body.js_render)
-        result = await _extract_property(scraped["content"], body.url, scraped["js_rendered"])
+        result = await _extract_property(
+            scraped["content"],
+            body.url,
+            scraped["js_rendered"],
+            page_context=scraped.get("page_context") or "",
+        )
         _with_render_meta(result, scraped)
         result["auth_method"] = "x402"
         return result
@@ -1628,7 +1743,13 @@ async def extract(body: ExtractRequest, request: Request):
 
         _arm_credit_charge(request, api_key, key_info, EXTRACT_CREDITS)
         scraped = await _scrape(body.url, body.js_render)
-        result = await _extract_structured(scraped["content"], body.url, body.fields, scraped["js_rendered"])
+        result = await _extract_structured(
+            scraped["content"],
+            body.url,
+            body.fields,
+            scraped["js_rendered"],
+            page_context=scraped.get("page_context") or "",
+        )
         _with_render_meta(result, scraped)
         result["auth_method"] = "api_key"
         return result
@@ -1636,7 +1757,13 @@ async def extract(body: ExtractRequest, request: Request):
     # x402 payment was verified in middleware and is settled only on success.
     if getattr(request.state, "x402_payment_valid", False):
         scraped = await _scrape(body.url, body.js_render)
-        result = await _extract_structured(scraped["content"], body.url, body.fields, scraped["js_rendered"])
+        result = await _extract_structured(
+            scraped["content"],
+            body.url,
+            body.fields,
+            scraped["js_rendered"],
+            page_context=scraped.get("page_context") or "",
+        )
         _with_render_meta(result, scraped)
         result["auth_method"] = "x402"
         return result

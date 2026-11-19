@@ -36,7 +36,7 @@ def _insert_key(credits: int = 100) -> str:
     return key
 
 
-async def _fake_extract(markdown, url, fields, js_rendered):
+async def _fake_extract(markdown, url, fields, js_rendered, **kwargs):
     return {
         "url": url,
         "status": "success",
