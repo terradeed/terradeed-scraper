@@ -11,7 +11,7 @@ Pay-per-use web scraping and structured data extraction for AI agents. No API ke
 | Endpoint | Price | Output |
 |----------|-------|--------|
 | `POST /scrape` | $0.01 USDC | Clean LLM-ready markdown from any URL |
-| `POST /extract` | $0.05 USDC | Schema-driven structured JSON — pass fields, receive typed values |
+| `POST /extract` | $0.05 USDC | Schema-driven structured JSON: pass fields, receive typed values |
 | `GET /v1/uk/tenders` | $0.02 USDC | UK public tender notices (Find a Tender + Contracts Finder), up to 25 results |
 | `GET /v1/uk/grants` | free | v1 placeholder. Innovate UK text is not republished yet |
 
@@ -27,7 +27,7 @@ $0.02 USDC per search, maximum 25 notices. Data is the public Find a Tender and 
 | `region` | `uk` (default), `england`, `scotland`, `wales`, `northern-ireland`, or an English region such as `north-west`. Hints are approximate. |
 | `updated_from` | `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS`. Defaults to the last 30 days. |
 | `stage` | `planning`, `tender`, or `award`. |
-| `limit` | 1–25. Default 25. |
+| `limit` | 1 to 25. Default 25. |
 | `cursor` | `next_cursor` from the previous page. Repeat the same `q`, `region`, `updated_from`, and `stage`. |
 
 `GET /v1/uk/grants` is free and does not republish Innovate UK or Chest text in v1.
@@ -36,7 +36,7 @@ $0.02 USDC per search, maximum 25 notices. Data is the public Find a Tender and 
 
 ## Payment
 
-This API uses the [x402 protocol](https://x402.org) for autonomous micropayments. Your client sends a standard HTTP request, receives a `402 Payment Required` response with payment details, pays $0.01–$0.10 USDC on Base mainnet, and retries. The x402 SDK handles this automatically.
+This API uses the [x402 protocol](https://x402.org) for autonomous micropayments. Your client sends a standard HTTP request, receives a `402 Payment Required` response with payment details, pays $0.01 to $0.10 USDC on Base mainnet, and retries. The x402 SDK handles this automatically.
 
 - **Network:** Base mainnet (`eip155:8453`)
 - **Asset:** USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
@@ -45,7 +45,7 @@ This API uses the [x402 protocol](https://x402.org) for autonomous micropayments
 
 ---
 
-## Quick Start — Python
+## Quick Start: Python
 
 Install the x402 SDK:
 
@@ -72,7 +72,7 @@ async def main():
     register_exact_evm_client(client, EthAccountSigner(account))
 
     async with x402HttpxClient(client) as http:
-        # Scrape — returns LLM-ready markdown
+        # Scrape: returns LLM-ready markdown
         response = await http.post(
             "https://api.terradeed.co.uk/scrape",
             json={"url": "https://example.com", "js_render": False}
@@ -175,7 +175,7 @@ GET https://api.terradeed.co.uk/health              # Health and capabilities
 GET https://api.terradeed.co.uk/docs                # Interactive API docs
 ```
 
-Indexed in the [Agentic Market catalogue](https://onyx-actions.onrender.com/bazaar) — ID 58838. Discoverable via `mapper-mcp search_endpoints` with `terradeed` from any MCP client.
+Indexed in the [Agentic Market catalogue](https://onyx-actions.onrender.com/bazaar), ID 58838. Discoverable via `mapper-mcp search_endpoints` with `terradeed` from any MCP client.
 
 ---
 
@@ -194,7 +194,7 @@ Indexed in the [Agentic Market catalogue](https://onyx-actions.onrender.com/baza
 - Playwright / Chromium (JS rendering)
 - trafilatura (content extraction)
 - Claude Sonnet (structured extraction)
-- Hosted on Railway — Base mainnet
+- Hosted on Railway, Base mainnet
 
 ---
 
