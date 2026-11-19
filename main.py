@@ -2166,6 +2166,39 @@ async def get_key_status(key_prefix: str, request: Request):
             "is_active": bool(row["is_active"])
         }
 
+@app.post("/admin/keys/{key_prefix}/revoke")
+async def revoke_key(key_prefix: str, request: Request):
+    """Revoke exactly one API key by its prefix (admin only)"""
+    admin_secret = request.headers.get("x-admin-secret", "")
+    if not secrets.compare_digest(admin_secret.encode(), ADMIN_SECRET.encode()):
+        raise HTTPException(status_code=401, detail="Invalid admin secret")
+
+    # Accept the 12-character prefix with or without the trailing "..."
+    stored_prefix = key_prefix[:-3] if key_prefix.endswith("...") else key_prefix
+    stored_prefix = f"{stored_prefix}..."
+
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, is_active FROM api_keys WHERE key_prefix = ?",
+            (stored_prefix,)
+        ).fetchall()
+
+        if not rows:
+            raise HTTPException(status_code=404, detail="Key not found")
+        if len(rows) > 1:
+            logging.warning("Admin revoke refused: prefix %s matches %d keys", stored_prefix, len(rows))
+            raise HTTPException(status_code=409, detail="Prefix matches more than one key; nothing revoked")
+
+        row = rows[0]
+        if row["is_active"]:
+            conn.execute("UPDATE api_keys SET is_active = 0 WHERE id = ?", (row["id"],))
+            conn.commit()
+            logging.warning("Admin revoke: key %s revoked", stored_prefix)
+        else:
+            logging.warning("Admin revoke: key %s was already revoked", stored_prefix)
+
+    return {"key_prefix": stored_prefix, "is_active": False}
+
 def usd_amount_from_atomic(atomic: str) -> str:
     """Decimal USD for discovery documents. Runtime x402 amounts stay atomic."""
     minor = int(atomic)
