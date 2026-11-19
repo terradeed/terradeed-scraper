@@ -930,6 +930,53 @@ async def _scrape(url: str, js_render: bool = False):
         result["fallback_reason"] = fallback_reason
     return result
 
+# Sonnet 5.5 thinks before it answers when the request omits `thinking`.
+# That leading block has no "text" key, so content[0]["text"] raises KeyError.
+MODEL_NO_TEXT_DETAIL = "Model response contained no usable text"
+
+
+def _anthropic_message_text(response) -> str:
+    """Join the text blocks from an Anthropic Messages response.
+
+    Adaptive thinking is the default on Claude Sonnet 5.5, so a reply can
+    start with a thinking block (or another non-text block) and put the
+    answer in a later block. Blocks whose type is not ``text`` are skipped.
+    A block with no type and a string ``text`` field is kept so a plain
+    single-block reply still parses.
+    """
+    try:
+        payload = response.json()
+    except Exception:
+        logging.warning("Anthropic response body was not JSON", exc_info=True)
+        raise HTTPException(status_code=502, detail=MODEL_NO_TEXT_DETAIL)
+
+    content = payload.get("content") if isinstance(payload, dict) else None
+    parts: list[str] = []
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") not in (None, "text"):
+                continue
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+
+    raw_text = "".join(parts).strip()
+    if raw_text:
+        return raw_text
+
+    kinds: list[str] = []
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict):
+                kinds.append(str(block.get("type") or "untyped"))
+            else:
+                kinds.append(type(block).__name__)
+    logging.warning("Anthropic response contained no text blocks: %s", kinds)
+    raise HTTPException(status_code=502, detail=MODEL_NO_TEXT_DETAIL)
+
+
 async def _extract_structured(
     markdown: str,
     url: str,
@@ -981,15 +1028,15 @@ Content:
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f"Anthropic error: {response.status_code} - {response.text}")
 
+    raw_text = _anthropic_message_text(response)
     try:
-        raw_text = response.json()["content"][0]["text"].strip()
         # Claude sometimes wraps JSON in markdown code fences — strip them
         if raw_text.startswith("```"):
             raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text[3:]
             if raw_text.endswith("```"):
                 raw_text = raw_text[:-3].strip()
         data = json.loads(raw_text)
-    except:
+    except json.JSONDecodeError:
         raise HTTPException(status_code=502, detail="Malformed JSON from model")
 
     return {"url": url, "status": "success", "data": data, "fields_requested": fields, "fields_extracted": [k for k, v in data.items() if v is not None], "js_rendered": js_rendered, "model": model_id}
@@ -1106,7 +1153,7 @@ Content:
             detail=f"Anthropic error: {response.status_code} - {response.text}",
         )
 
-    raw_text = response.json()["content"][0]["text"].strip()
+    raw_text = _anthropic_message_text(response)
 
     # Strip markdown fences if Claude wraps them despite instructions
     if raw_text.startswith("```"):
