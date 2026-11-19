@@ -52,7 +52,12 @@ USDC_DECIMALS = 6
 NETWORK_CLIENT = "base"
 BASE_URL = "https://api.terradeed.co.uk"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-EXTRACT_MODEL = "claude-sonnet-5-5"
+EXTRACT_MODEL = "claude-sonnet-4-6"
+# Sonnet 4.6 accepts this and rejects "between_tools". Omitting the field
+# also leaves thinking off on 4.6. Sending "disabled" keeps a later model
+# that thinks by default from turning it on with no other code change.
+# Sonnet 5.5 rejects "disabled" (HTTP 400) and uses "between_tools" instead.
+EXTRACT_THINKING = {"type": "disabled"}
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
@@ -1013,6 +1018,7 @@ Content:
             json={
                 "model": model_id,
                 "max_tokens": 1024,
+                "thinking": EXTRACT_THINKING,
                 "system": [
                     {
                         "type": "text",
@@ -1135,6 +1141,7 @@ Content:
             json={
                 "model": EXTRACT_MODEL,
                 "max_tokens": 2048,
+                "thinking": EXTRACT_THINKING,
                 "system": [
                     {
                         "type": "text",

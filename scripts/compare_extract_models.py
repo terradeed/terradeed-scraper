@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Compare two Claude models on fixed /extract fixtures.
+"""Compare Claude models on fixed /extract fixtures.
 
-Commit 7536247 switched EXTRACT_MODEL from claude-sonnet-4-6 to
-claude-sonnet-5-5 with no checked-in eval. This script does not change
-that setting. It runs the bundled HTML pages through the same markdown
-extraction and ``_extract_structured`` call as POST /extract, once per
-model, and writes field accuracy.
+The live model is ``main.EXTRACT_MODEL``. ``PREVIOUS_MODEL`` is the id
+from before commit 7536247. When the two differ, both are called. This
+script does not change the live setting. It runs the bundled HTML pages
+through the same markdown extraction and ``_extract_structured`` call
+as POST /extract, once per model, and writes field accuracy.
 
 No paid API call is made unless ANTHROPIC_API_KEY is set. The bundled
-set is 4 pages x 2 models = 8 calls, and the script refuses to exceed 20.
+set is 4 pages, and the script refuses to exceed 20 calls.
 
     python scripts/compare_extract_models.py
     python scripts/compare_extract_models.py --output comparison.json

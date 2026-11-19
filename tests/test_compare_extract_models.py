@@ -16,10 +16,10 @@ sys.path.insert(0, str(SCRIPTS))
 import compare_extract_models as compare  # noqa: E402
 
 
-def test_extract_model_is_unchanged():
-    assert main.EXTRACT_MODEL == "claude-sonnet-5-5"
+def test_extract_model_is_sonnet_4_6():
+    assert main.EXTRACT_MODEL == "claude-sonnet-4-6"
     assert compare.PREVIOUS_MODEL == "claude-sonnet-4-6"
-    assert compare.model_ids(main) == ["claude-sonnet-5-5", "claude-sonnet-4-6"]
+    assert compare.model_ids(main) == ["claude-sonnet-4-6"]
 
 
 def test_score_fields_normalises_strings_and_counts_misses():
@@ -69,8 +69,8 @@ def test_skips_paid_calls_when_api_key_is_missing(monkeypatch, tmp_path):
     report = json.loads(out.read_text(encoding="utf-8"))
     assert report["status"] == "not_run"
     assert report["calls"] == 0
-    assert report["planned_calls"] == 8
-    assert report["models"] == ["claude-sonnet-5-5", "claude-sonnet-4-6"]
+    assert report["planned_calls"] == 4
+    assert report["models"] == ["claude-sonnet-4-6"]
 
 
 def test_dry_run_makes_no_calls_even_with_a_key(monkeypatch, tmp_path):
@@ -91,7 +91,7 @@ def test_dry_run_makes_no_calls_even_with_a_key(monkeypatch, tmp_path):
     assert report["calls"] == 0
 
 
-def test_mocked_comparison_uses_both_models_under_the_cap(monkeypatch, tmp_path):
+def test_mocked_comparison_uses_the_live_model_under_the_cap(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-not-a-real-key")
     calls = []
 
@@ -109,7 +109,8 @@ def test_mocked_comparison_uses_both_models_under_the_cap(monkeypatch, tmp_path)
             calls.append(json["model"])
             prompt = json["messages"][0]["content"]
             assert "Extract these fields" in prompt
-            assert json["model"] in {"claude-sonnet-5-5", "claude-sonnet-4-6"}
+            assert json["model"] == "claude-sonnet-4-6"
+            assert json["thinking"] == {"type": "disabled"}
             expected = next(
                 item["expected"]
                 for item in compare.load_fixtures()
@@ -129,13 +130,11 @@ def test_mocked_comparison_uses_both_models_under_the_cap(monkeypatch, tmp_path)
     assert code == 0
     report = json.loads(out.read_text(encoding="utf-8"))
     assert report["status"] == "compared"
-    assert report["calls"] == 8
+    assert report["calls"] == 4
     assert report["calls"] <= 20
-    assert calls.count("claude-sonnet-5-5") == 4
     assert calls.count("claude-sonnet-4-6") == 4
-    assert report["summary"]["claude-sonnet-5-5"] == 1.0
     assert report["summary"]["claude-sonnet-4-6"] == 1.0
-    assert main.EXTRACT_MODEL == "claude-sonnet-5-5"
+    assert main.EXTRACT_MODEL == "claude-sonnet-4-6"
 
 
 def json_dumps(payload):

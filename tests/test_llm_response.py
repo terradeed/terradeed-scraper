@@ -71,8 +71,8 @@ def _patch_anthropic(monkeypatch, content, *, json_raises=False):
 
         async def post(self, url, headers=None, json=None, timeout=None):
             assert url == "https://api.anthropic.com/v1/messages"
-            assert json["model"] == main.EXTRACT_MODEL
-            assert "thinking" not in json
+            assert json["model"] == main.EXTRACT_MODEL == "claude-sonnet-4-6"
+            assert json["thinking"] == {"type": "disabled"}
             return _reply(content, json_raises=json_raises)
 
     monkeypatch.setattr(main.httpx, "AsyncClient", FakeClient)
@@ -194,6 +194,45 @@ async def test_extractors_read_a_normal_text_reply(monkeypatch, quiet_enrichment
     text_block = {**block, "text": json.dumps(_payload_for(kind))}
     _patch_anthropic(monkeypatch, [text_block])
     await _call(kind)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind,max_tokens",
+    [("extract", 1024), ("property", 2048)],
+)
+async def test_request_uses_sonnet_4_6_with_thinking_disabled(
+    monkeypatch, quiet_enrichment, kind, max_tokens
+):
+    """Both paid extract calls name the model and leave extended thinking off."""
+    captured = {}
+    text = json.dumps(_payload_for(kind))
+
+    class RecordingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None, timeout=None):
+            captured["body"] = json
+            return _reply([{"type": "text", "text": text}])
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", RecordingClient)
+    monkeypatch.setattr(main, "ANTHROPIC_API_KEY", "test-not-a-real-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-not-a-real-key")
+
+    await _call(kind)
+
+    body = captured["body"]
+    assert body["model"] == "claude-sonnet-4-6"
+    assert body["model"] == main.EXTRACT_MODEL
+    assert body["thinking"] == {"type": "disabled"}
+    assert body["max_tokens"] == max_tokens
 
 
 @pytest.mark.asyncio
