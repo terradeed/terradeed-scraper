@@ -19,7 +19,7 @@ from contextlib import contextmanager
 import httpx
 import trafilatura
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
 
@@ -897,10 +897,20 @@ async def _scrape(url: str, js_render: bool = False):
         result["fallback_reason"] = fallback_reason
     return result
 
-async def _extract_structured(markdown: str, url: str, fields: list[str], js_rendered: bool):
-    if not ANTHROPIC_API_KEY:
+async def _extract_structured(
+    markdown: str,
+    url: str,
+    fields: list[str],
+    js_rendered: bool,
+    *,
+    model: str | None = None,
+):
+    """Extract named fields. ``model`` defaults to EXTRACT_MODEL and does not change it."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip() or ANTHROPIC_API_KEY
+    if not api_key:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY missing")
 
+    model_id = model or EXTRACT_MODEL
     fields_str = ", ".join(f'"{f}"' for f in fields)
     prompt = f"""Extract these fields: [{fields_str}]
 
@@ -915,13 +925,13 @@ Content:
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={
-                "x-api-key": ANTHROPIC_API_KEY,
+                "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
                 "anthropic-beta": "prompt-caching-2024-07-31",
             },
             json={
-                "model": EXTRACT_MODEL,
+                "model": model_id,
                 "max_tokens": 1024,
                 "system": [
                     {
@@ -949,7 +959,7 @@ Content:
     except:
         raise HTTPException(status_code=502, detail="Malformed JSON from model")
 
-    return {"url": url, "status": "success", "data": data, "fields_requested": fields, "fields_extracted": [k for k, v in data.items() if v is not None], "js_rendered": js_rendered, "model": EXTRACT_MODEL}
+    return {"url": url, "status": "success", "data": data, "fields_requested": fields, "fields_extracted": [k for k, v in data.items() if v is not None], "js_rendered": js_rendered, "model": model_id}
 
 PROPERTY_SYSTEM_PROMPT = """You are a commercial property data extraction specialist. Extract structured property listing data from the provided page content.
 
@@ -1178,6 +1188,191 @@ PAID_ROUTES = {
     ("GET", "/v1/uk/tenders"),
 }
 
+# Returned when a handler produces 2xx without content worth paying for.
+# Upstream 4xx/5xx responses are passed through unchanged.
+EMPTY_EXTRACTION_DETAIL = (
+    "Empty extraction: no usable content was returned, so this call was not charged."
+)
+
+
+def _arm_credit_charge(request: Request, api_key: str, key_info: dict, credits: int) -> None:
+    """Record an API-key charge. It is applied only after a usable 2xx response."""
+    request.state.bill_api_key = api_key
+    request.state.bill_credits = credits
+    request.state.credits_before = key_info["credits_remaining"]
+
+
+def _value_is_usable(value: Any) -> bool:
+    """True when a value is present. False, zero, and nested data all count."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_value_is_usable(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_value_is_usable(item) for item in value)
+    return True
+
+
+def _payload_is_usable(path: str, payload: Any) -> bool:
+    """Whether a paid response is complete enough to settle or deduct for.
+
+    A tender search with an empty result list is usable: the search ran.
+    A scrape or extraction with no content is not.
+    """
+    if not isinstance(payload, dict):
+        return False
+    if path == "/scrape":
+        content = payload.get("content")
+        return (
+            payload.get("status") == "success"
+            and isinstance(content, str)
+            and bool(content.strip())
+        )
+    if path == "/extract":
+        data = payload.get("data")
+        return (
+            payload.get("status") == "success"
+            and isinstance(data, dict)
+            and any(_value_is_usable(item) for item in data.values())
+        )
+    if path == "/extract/property":
+        prop = payload.get("property")
+        return (
+            payload.get("status") == "success"
+            and isinstance(prop, dict)
+            and _value_is_usable(prop)
+        )
+    if path == "/v1/uk/tenders":
+        licence = payload.get("licence")
+        return isinstance(payload.get("results"), list) and isinstance(licence, str) and bool(licence.strip())
+    return False
+
+
+async def _read_response_body(response: Response) -> bytes:
+    """Read a handler response.
+
+    BaseHTTPMiddleware hands back a stream with no ``body`` attribute.
+    A normal Response already has ``body`` and must not be iterated as well.
+    """
+    body = getattr(response, "body", None)
+    if isinstance(body, memoryview):
+        return body.tobytes()
+    if isinstance(body, str):
+        return body.encode()
+    if isinstance(body, (bytes, bytearray)):
+        return bytes(body)
+    chunks: list[bytes] = []
+    iterator = getattr(response, "body_iterator", None)
+    if iterator is None:
+        return b""
+    async for chunk in iterator:
+        if isinstance(chunk, dict):
+            continue
+        chunks.append(chunk if isinstance(chunk, bytes) else bytes(chunk))
+    return b"".join(chunks)
+
+
+async def _response_payload(response: Response) -> Any:
+    raw = await _read_response_body(response)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return None
+
+
+async def _settle_x402(request: Request, path: str) -> Optional[str]:
+    """Settle a verified payment. Returns the PAYMENT-RESPONSE header, or None.
+
+    The settle call, receipt encoding, and failure logging match the previous
+    per-route blocks. A settlement exception does not fail the request.
+    """
+    payload = getattr(request.state, "x402_payload", None)
+    requirements = getattr(request.state, "x402_requirements", None)
+    if not payload or not requirements:
+        return None
+    try:
+        settle_result = await x402_server.settle_payment(
+            payload=payload,
+            requirements=requirements,
+        )
+        if os.environ.get("DEBUG_SETTLE"):
+            print(
+                f"[DEBUG_SETTLE] {path} settle_result: "
+                f"{json.dumps(settle_result, default=str, indent=2)}"
+            )
+        return base64.b64encode(
+            json.dumps(settle_result, default=str).encode()
+        ).decode()
+    except Exception as exc:
+        print(f"Payment settlement warning: {exc}")
+        if os.environ.get("DEBUG_SETTLE"):
+            import traceback
+            traceback.print_exc()
+        return None
+
+
+def _apply_credit_charge(request: Request, payload: dict, status_code: int) -> JSONResponse:
+    """Deduct credits after a usable success. A lost race returns 402 and no body."""
+    api_key = request.state.bill_api_key
+    credits = request.state.bill_credits
+    if not deduct_credits(api_key, credits, request.url.path):
+        return JSONResponse(
+            status_code=402,
+            content={
+                "detail": {
+                    "error": "Insufficient credits",
+                    "credits_remaining": request.state.credits_before,
+                    "credits_required": credits,
+                }
+            },
+        )
+    body = dict(payload)
+    body["auth_method"] = "api_key"
+    body["credits_remaining"] = request.state.credits_before - credits
+    return JSONResponse(status_code=status_code, content=body)
+
+
+async def _commit_payment(request: Request, response: Response) -> Response:
+    """Settle x402 or deduct credits only when the handler returned usable 2xx content."""
+    path = request.url.path
+    x402_ok = bool(getattr(request.state, "x402_payment_valid", False))
+    api_key = getattr(request.state, "bill_api_key", None)
+    if not x402_ok and not api_key:
+        return response
+
+    if response.status_code < 200 or response.status_code >= 300:
+        logging.info(
+            "Not charging %s %s: handler status %s",
+            request.method,
+            path,
+            response.status_code,
+        )
+        return response
+
+    payload = await _response_payload(response)
+    if not _payload_is_usable(path, payload):
+        logging.info(
+            "Not charging %s %s: response had no usable content",
+            request.method,
+            path,
+        )
+        return JSONResponse(status_code=422, content={"detail": EMPTY_EXTRACTION_DETAIL})
+
+    if x402_ok:
+        header = await _settle_x402(request, path)
+        headers = {"PAYMENT-RESPONSE": header} if header else {}
+        return JSONResponse(
+            status_code=response.status_code,
+            content=payload,
+            headers=headers,
+        )
+
+    return _apply_credit_charge(request, payload, response.status_code)
+
 
 # Middleware: x402 auth check BEFORE Pydantic validation
 @app.middleware("http")
@@ -1185,6 +1380,8 @@ async def x402_auth_middleware(request: Request, call_next):
     """
     Intercept paid routes to check auth before Pydantic validation.
     Returns 402 immediately if no valid auth present, avoiding 422 validation errors.
+    Verified x402 payments are settled, and API-key credits are deducted, only
+    after the handler returns a 2xx response with usable content.
     """
     if (request.method, request.url.path) in PAID_ROUTES:
         requirements_dict, resource, bazaar_ext = _payment_for(request.url.path)
@@ -1247,8 +1444,11 @@ async def x402_auth_middleware(request: Request, call_next):
                         status_code=402,
                         content={"error": f"Payment verification error: {str(e)}"}
                     )
-    
-    return await call_next(request)
+
+    response = await call_next(request)
+    if (request.method, request.url.path) in PAID_ROUTES:
+        return await _commit_payment(request, response)
+    return response
 
 # Endpoints
 @app.post("/scrape")
@@ -1264,43 +1464,17 @@ async def scrape(body: ScrapeRequest, request: Request):
             raise HTTPException(status_code=401, detail=key_info["error"])
         if key_info["credits_remaining"] < SCRAPE_CREDITS:
             raise HTTPException(status_code=402, detail={"error": "Insufficient credits", "credits_remaining": key_info["credits_remaining"], "credits_required": SCRAPE_CREDITS})
-        
+
+        _arm_credit_charge(request, api_key, key_info, SCRAPE_CREDITS)
         result = await _scrape(body.url, body.js_render)
-        deduct_credits(api_key, SCRAPE_CREDITS, "/scrape")
         result["auth_method"] = "api_key"
-        result["credits_remaining"] = key_info["credits_remaining"] - SCRAPE_CREDITS
         return result
-    
-    # Check for x402 payment (verified in middleware)
+
+    # x402 payment was verified in middleware. Settlement happens after this
+    # returns, and only when the response is a usable success.
     if getattr(request.state, "x402_payment_valid", False):
         result = await _scrape(body.url, body.js_render)
         result["auth_method"] = "x402"
-
-        # Settle payment after successful service delivery
-        payment_response_header = None
-        try:
-            payload = getattr(request.state, "x402_payload", None)
-            requirements = getattr(request.state, "x402_requirements", None)
-            if payload and requirements:
-                settle_result = await x402_server.settle_payment(
-                    payload=payload,
-                    requirements=requirements
-                )
-                # DEBUG_SETTLE: Log full settle response
-                if os.environ.get("DEBUG_SETTLE"):
-                    print(f"[DEBUG_SETTLE] /scrape settle_result: {json.dumps(settle_result, default=str, indent=2)}")
-                # PAYMENT-RESPONSE header per x402 v2 spec (base64-encoded JSON settlement receipt)
-                payment_response_header = base64.b64encode(
-                    json.dumps(settle_result, default=str).encode()
-                ).decode()
-        except Exception as e:
-            print(f"Payment settlement warning: {e}")
-            if os.environ.get("DEBUG_SETTLE"):
-                import traceback
-                traceback.print_exc()
-
-        if payment_response_header:
-            return JSONResponse(content=result, headers={"PAYMENT-RESPONSE": payment_response_header})
         return result
 
     # No valid auth
@@ -1331,41 +1505,19 @@ async def extract_property(body: PropertyExtractRequest, request: Request):
                 },
             )
 
+        _arm_credit_charge(request, api_key, key_info, PROPERTY_CREDITS)
         scraped = await _scrape(body.url, body.js_render)
         result = await _extract_property(scraped["content"], body.url, scraped["js_rendered"])
         _with_render_meta(result, scraped)
-        deduct_credits(api_key, PROPERTY_CREDITS, "/extract/property")
         result["auth_method"] = "api_key"
-        result["credits_remaining"] = key_info["credits_remaining"] - PROPERTY_CREDITS
         return result
 
-    # Check for x402 payment (verified in middleware)
+    # x402 payment was verified in middleware and is settled only on success.
     if getattr(request.state, "x402_payment_valid", False):
         scraped = await _scrape(body.url, body.js_render)
         result = await _extract_property(scraped["content"], body.url, scraped["js_rendered"])
         _with_render_meta(result, scraped)
         result["auth_method"] = "x402"
-
-        # Settle payment after successful service delivery
-        try:
-            payload = getattr(request.state, "x402_payload", None)
-            requirements = getattr(request.state, "x402_requirements", None)
-            if payload and requirements:
-                settle_result = await x402_server.settle_payment(
-                    payload=payload,
-                    requirements=requirements,
-                )
-                if os.environ.get("DEBUG_SETTLE"):
-                    print(
-                        f"[DEBUG_SETTLE] /extract/property settle_result: "
-                        f"{json.dumps(settle_result, default=str, indent=2)}"
-                    )
-        except Exception as e:
-            print(f"Payment settlement warning: {e}")
-            if os.environ.get("DEBUG_SETTLE"):
-                import traceback
-                traceback.print_exc()
-
         return result
 
     # No valid auth
@@ -1387,46 +1539,19 @@ async def extract(body: ExtractRequest, request: Request):
         if key_info["credits_remaining"] < EXTRACT_CREDITS:
             raise HTTPException(status_code=402, detail={"error": "Insufficient credits", "credits_remaining": key_info["credits_remaining"], "credits_required": EXTRACT_CREDITS})
 
+        _arm_credit_charge(request, api_key, key_info, EXTRACT_CREDITS)
         scraped = await _scrape(body.url, body.js_render)
         result = await _extract_structured(scraped["content"], body.url, body.fields, scraped["js_rendered"])
         _with_render_meta(result, scraped)
-        deduct_credits(api_key, EXTRACT_CREDITS, "/extract")
         result["auth_method"] = "api_key"
-        result["credits_remaining"] = key_info["credits_remaining"] - EXTRACT_CREDITS
         return result
 
-    # Check for x402 payment (verified in middleware)
+    # x402 payment was verified in middleware and is settled only on success.
     if getattr(request.state, "x402_payment_valid", False):
         scraped = await _scrape(body.url, body.js_render)
         result = await _extract_structured(scraped["content"], body.url, body.fields, scraped["js_rendered"])
         _with_render_meta(result, scraped)
         result["auth_method"] = "x402"
-
-        # Settle payment after successful service delivery
-        payment_response_header = None
-        try:
-            payload = getattr(request.state, "x402_payload", None)
-            requirements = getattr(request.state, "x402_requirements", None)
-            if payload and requirements:
-                settle_result = await x402_server.settle_payment(
-                    payload=payload,
-                    requirements=requirements
-                )
-                # DEBUG_SETTLE: Log full settle response
-                if os.environ.get("DEBUG_SETTLE"):
-                    print(f"[DEBUG_SETTLE] /extract settle_result: {json.dumps(settle_result, default=str, indent=2)}")
-                # PAYMENT-RESPONSE header per x402 v2 spec (base64-encoded JSON settlement receipt)
-                payment_response_header = base64.b64encode(
-                    json.dumps(settle_result, default=str).encode()
-                ).decode()
-        except Exception as e:
-            print(f"Payment settlement warning: {e}")
-            if os.environ.get("DEBUG_SETTLE"):
-                import traceback
-                traceback.print_exc()
-
-        if payment_response_header:
-            return JSONResponse(content=result, headers={"PAYMENT-RESPONSE": payment_response_header})
         return result
 
     # No valid auth
@@ -1468,6 +1593,7 @@ async def uk_tenders(
                     "credits_required": TENDER_CREDITS,
                 },
             )
+        _arm_credit_charge(request, api_key, key_info, TENDER_CREDITS)
     elif not paid_x402:
         return payment_required_response(
             TENDER_REQUIREMENTS, TENDER_RESOURCE, TENDER_BAZAAR_EXT
@@ -1488,47 +1614,10 @@ async def uk_tenders(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if auth_method == "api_key":
-        if not deduct_credits(api_key, TENDER_CREDITS, "/v1/uk/tenders"):
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "Insufficient credits",
-                    "credits_remaining": key_info["credits_remaining"],
-                    "credits_required": TENDER_CREDITS,
-                },
-            )
         result["auth_method"] = "api_key"
-        result["credits_remaining"] = key_info["credits_remaining"] - TENDER_CREDITS
         return result
 
     result["auth_method"] = "x402"
-    payment_response_header = None
-    try:
-        payload = getattr(request.state, "x402_payload", None)
-        requirements = getattr(request.state, "x402_requirements", None)
-        if payload and requirements:
-            settle_result = await x402_server.settle_payment(
-                payload=payload,
-                requirements=requirements,
-            )
-            if os.environ.get("DEBUG_SETTLE"):
-                print(
-                    "[DEBUG_SETTLE] /v1/uk/tenders settle_result: "
-                    + json.dumps(settle_result, default=str, indent=2)
-                )
-            payment_response_header = base64.b64encode(
-                json.dumps(settle_result, default=str).encode()
-            ).decode()
-    except Exception as exc:
-        print(f"Payment settlement warning: {exc}")
-        if os.environ.get("DEBUG_SETTLE"):
-            import traceback
-            traceback.print_exc()
-
-    if payment_response_header:
-        return JSONResponse(
-            content=result, headers={"PAYMENT-RESPONSE": payment_response_header}
-        )
     return result
 
 

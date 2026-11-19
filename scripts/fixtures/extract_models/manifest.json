@@ -1,0 +1,42 @@
+[
+  {
+    "name": "product",
+    "file": "product.html",
+    "url": "https://fixtures.terradeed.invalid/product",
+    "expected": {
+      "title": "Oak Desk Lamp",
+      "price": "£42.00",
+      "availability": "In stock"
+    }
+  },
+  {
+    "name": "job",
+    "file": "job.html",
+    "url": "https://fixtures.terradeed.invalid/job",
+    "expected": {
+      "job_title": "Senior Archivist",
+      "location": "Manchester",
+      "salary": "£38,000"
+    }
+  },
+  {
+    "name": "company",
+    "file": "company.html",
+    "url": "https://fixtures.terradeed.invalid/company",
+    "expected": {
+      "company_name": "Northwood Home",
+      "phone": "0161 496 0123",
+      "city": "Manchester"
+    }
+  },
+  {
+    "name": "event",
+    "file": "event.html",
+    "url": "https://fixtures.terradeed.invalid/event",
+    "expected": {
+      "event_name": "Winter Lecture",
+      "venue": "Manchester Central Library",
+      "date": "12 March 2026"
+    }
+  }
+]
