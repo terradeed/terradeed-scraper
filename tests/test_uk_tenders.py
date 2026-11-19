@@ -204,7 +204,8 @@ async def test_happy_path_merges_sources_and_strips_contacts():
         "source",
     }
     _assert_no_personal_data(result)
-    assert len(router.calls) == 2
+    assert sum("find-tender" in url for url in router.calls) == 3
+    assert sum("contractsfinder" in url for url in router.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -279,7 +280,8 @@ async def test_cursor_pages_cached_results_without_another_fetch():
     assert len(second["results"]) == 5
     assert second["next_cursor"] is None
     assert second["attribution"] == ATTRIBUTION
-    assert len(router.calls) == 2
+    assert sum("find-tender" in url for url in router.calls) == 3
+    assert sum("contractsfinder" in url for url in router.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -296,15 +298,25 @@ async def test_filtered_search_reads_a_second_page_and_stops():
         "https://www.find-tender.service.gov.uk/api/1.0/ocdsReleasePackages?"
         "cursor=page2"
     )
-    router = _Router(
-        fts_pages=[_package([noise], next_url=next_url), _package([match])],
-        cf_pages=[_package([])],
-    )
-    result = await _service(router).search(q="library staff")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        handler.calls.append(url)
+        if "contractsfinder" in url:
+            return httpx.Response(200, json=_package([]))
+        if "cursor=page2" in url:
+            return httpx.Response(200, json=_package([match]))
+        if request.url.params.get("stages") == "planning":
+            return httpx.Response(200, json=_package([noise], next_url=next_url))
+        return httpx.Response(200, json=_package([]))
+
+    handler.calls = []
+    service = TenderService(transport=httpx.MockTransport(handler), min_interval=0)
+    result = await service.search(q="library staff")
 
     assert [item["ocid"] for item in result["results"]] == ["ocds-h6vhtk-match"]
-    assert sum("find-tender" in url for url in router.calls) == 2
-    assert any("cursor=page2" in url for url in router.calls)
+    assert sum("find-tender" in url for url in handler.calls) == 4
+    assert any("cursor=page2" in url for url in handler.calls)
     assert result["coverage"]["truncated"] is False
 
 
@@ -322,8 +334,9 @@ async def test_broad_search_does_not_walk_past_the_first_page():
 
     assert len(result["results"]) == 1
     assert result["coverage"]["truncated"] is True
-    assert result["coverage"]["pages_fetched"]["find-tender"] == 1
-    assert sum("find-tender" in url for url in router.calls) == 1
+    assert result["coverage"]["pages_fetched"]["find-tender"] == 3
+    assert sum("find-tender" in url for url in router.calls) == 3
+    assert not any("cursor=page2" in url for url in router.calls)
 
 
 @pytest.mark.asyncio
@@ -335,7 +348,8 @@ async def test_repeat_search_uses_the_http_cache():
     service = _service(router)
     await service.search(q="training")
     await service.search(q="catering")
-    assert len(router.calls) == 2
+    assert sum("find-tender" in url for url in router.calls) == 3
+    assert sum("contractsfinder" in url for url in router.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -449,3 +463,111 @@ async def test_cursor_expires_with_the_cache():
     clock.t = 11
     with pytest.raises(TenderQueryError, match="expired"):
         await service.search(limit=10, cursor=first["next_cursor"])
+
+
+@pytest.mark.asyncio
+async def test_default_search_queries_each_fts_stage_and_dedupes_ocid():
+    """A comma-separated stages value returns no Find a Tender releases."""
+    older = _fts_release(
+        ocid="ocds-h6vhtk-shared",
+        id="000001-2026",
+        date="2026-11-01T00:00:00Z",
+        tag=["planning"],
+    )
+    older["tender"]["title"] = "Shared notice original"
+    newer = _fts_release(
+        ocid="ocds-h6vhtk-shared",
+        id="000002-2026",
+        date="2026-11-05T00:00:00Z",
+        tag=["tender"],
+    )
+    newer["tender"]["title"] = "Shared notice updated"
+    award = _fts_release(
+        ocid="ocds-h6vhtk-award",
+        id="000003-2026",
+        date="2026-11-04T00:00:00Z",
+        tag=["award"],
+    )
+    award["tender"]["title"] = "Award notice"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        handler.calls.append(str(request.url))
+        if "contractsfinder" in str(request.url):
+            assert request.url.params.get("stages") == "planning,tender,award"
+            return httpx.Response(200, json=_package([]))
+        stage = request.url.params.get("stages")
+        assert stage in {"planning", "tender", "award"}
+        releases = {
+            "planning": [older],
+            "tender": [newer],
+            "award": [award],
+        }[stage]
+        return httpx.Response(200, json=_package(releases))
+
+    handler.calls = []
+    service = TenderService(transport=httpx.MockTransport(handler), min_interval=0)
+    result = await service.search()
+
+    fts_calls = [url for url in handler.calls if "find-tender" in url]
+    assert len(fts_calls) == 3
+    assert len(handler.calls) == 4
+    by_ocid = {item["ocid"]: item for item in result["results"]}
+    assert set(by_ocid) == {"ocds-h6vhtk-shared", "ocds-h6vhtk-award"}
+    assert by_ocid["ocds-h6vhtk-shared"]["published"] == "2026-11-05T00:00:00Z"
+    assert by_ocid["ocds-h6vhtk-shared"]["title"] == "Shared notice updated"
+    assert by_ocid["ocds-h6vhtk-shared"]["stage"] == "tender"
+    assert by_ocid["ocds-h6vhtk-award"]["stage"] == "award"
+    assert result["sources"] == ["find-tender", "contracts-finder"]
+
+    await service.search()
+    assert len(handler.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_explicit_stage_queries_find_a_tender_once():
+    def handler(request: httpx.Request) -> httpx.Response:
+        handler.calls.append(request.url.params.get("stages"))
+        if "find-tender" in str(request.url):
+            return httpx.Response(200, json=_package([_fts_release(tag=["award"])]))
+        return httpx.Response(200, json=_package([]))
+
+    handler.calls = []
+    service = TenderService(transport=httpx.MockTransport(handler), min_interval=0)
+    result = await service.search(stage="award")
+
+    assert sorted(handler.calls) == ["award", "award"]
+    assert [item["stage"] for item in result["results"]] == ["award"]
+
+
+@pytest.mark.asyncio
+async def test_one_fts_stage_exception_keeps_the_other_stages():
+    """gather(return_exceptions=True) must not drop stages that succeeded."""
+    calls = []
+
+    async def fetch(source, url, max_pages):
+        if source == "contracts-finder":
+            return {"releases": [], "pages": 1, "truncated": False, "error": None}
+        stage = url.split("stages=", 1)[1].split("&", 1)[0]
+        calls.append(stage)
+        if stage == "tender":
+            raise RuntimeError("tender down")
+        release = _fts_release(
+            ocid=f"ocds-h6vhtk-{stage}",
+            id=f"00000{len(stage)}-2026",
+            date="2026-11-03T00:00:00Z",
+            tag=[stage],
+        )
+        release["tender"]["title"] = f"{stage} notice"
+        return {"releases": [release], "pages": 1, "truncated": False, "error": None}
+
+    service = TenderService(min_interval=0)
+    service._fetch_source = fetch
+    result = await service.search()
+
+    assert set(calls) == {"planning", "tender", "award"}
+    by_ocid = {item["ocid"]: item for item in result["results"]}
+    assert set(by_ocid) == {"ocds-h6vhtk-planning", "ocds-h6vhtk-award"}
+    assert by_ocid["ocds-h6vhtk-planning"]["title"] == "planning notice"
+    assert by_ocid["ocds-h6vhtk-award"]["title"] == "award notice"
+    assert any("tender down" in warning for warning in result["warnings"])
+    assert result["sources"] == ["find-tender", "contracts-finder"]

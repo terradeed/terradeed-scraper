@@ -347,7 +347,7 @@ SCRAPE_RESOURCE = {
 
 EXTRACT_RESOURCE = {
     "url": f"{BASE_URL}/extract",
-    "description": "Structured JSON from any webpage. Name the fields you want \u2014 company data, job listings, product specs, contact details, financial figures \u2014 and get them back with confidence scores. No scraper configuration needed.",
+    "description": "Structured JSON from any webpage. Name the fields you want \u2014 company data, job listings, product specs, contact details, financial figures \u2014 and get them back. No scraper configuration needed.",
     "mimeType": "application/json",
 }
 
@@ -1884,7 +1884,7 @@ LLMS_TXT = """# TerraDeed Scrape API
 > x402-powered web data extraction for AI agents. Three endpoints that turn any URL into usable intelligence:
 > 
 > • `/scrape` — Clean, LLM-ready markdown from any URL. JavaScript rendering included. Feed web content directly into agent context without parsing HTML. $0.01 USDC.
-> • `/extract` — Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back with confidence scores. No scraper configuration needed. $0.05 USDC.
+> • `/extract` — Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back. No scraper configuration needed. $0.05 USDC.
 > • `/extract/property` — UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available. $0.10 USDC.
 > • `/v1/uk/tenders` — UK public tender notices from the Find a Tender and Contracts Finder OCDS APIs. Keyword, region, stage, and updated-from filters. Up to 25 results. Open Government Licence v3.0. Contact names, emails, and phone numbers are omitted. $0.02 USDC.
 > 
@@ -1893,7 +1893,7 @@ LLMS_TXT = """# TerraDeed Scrape API
 ## What this API does
 
 - **Scrape** (`POST /scrape`, $0.01 USDC) — Clean, LLM-ready markdown from any URL. JavaScript rendering included. Feed web content directly into agent context without parsing HTML.
-- **Extract** (`POST /extract`, $0.05 USDC) — Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back with confidence scores. No scraper configuration needed.
+- **Extract** (`POST /extract`, $0.05 USDC) — Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back. No scraper configuration needed.
 - **Extract Property** (`POST /extract/property`, $0.10 USDC) — UK commercial property and land intelligence from any listing URL. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available. Site acquisition teams use this for initial screening.
 
 - You need the readable content of a web page as markdown for summarisation, RAG ingestion, or analysis → `POST /scrape` ($0.01)
@@ -1962,7 +1962,7 @@ Clean markdown...",
 
 ### POST /extract — $0.05 USDC
 
-Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back with confidence scores. No scraper configuration needed.
+Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back. No scraper configuration needed.
 
 Request body (JSON):
 
