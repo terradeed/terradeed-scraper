@@ -163,7 +163,7 @@ def _install_backends(monkeypatch, route, mode):
     async def extract_fail(markdown, url, fields, js_rendered, **kwargs):
         raise HTTPException(status_code=502, detail="Anthropic error: 529 - overloaded")
 
-    async def property_ok(markdown, url, js_rendered):
+    async def property_ok(markdown, url, js_rendered, **kwargs):
         if mode == "empty":
             prop = {"address": None, "asking_price": None}
             listing = None
@@ -182,7 +182,7 @@ def _install_backends(monkeypatch, route, mode):
             "model": "test",
         }
 
-    async def property_fail(markdown, url, js_rendered):
+    async def property_fail(markdown, url, js_rendered, **kwargs):
         raise HTTPException(status_code=502, detail="Anthropic error: 500 - upstream")
 
     async def tenders_ok(**kwargs):
