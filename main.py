@@ -47,6 +47,8 @@ PROPERTY_CREDITS = 10
 TENDER_PRICE = "$0.02"
 TENDER_CREDITS = 2
 APP_VERSION = "0.9.0"
+API_TITLE = "Terradeed Scrape API"
+USDC_DECIMALS = 6
 NETWORK_CLIENT = "base"
 BASE_URL = "https://api.terradeed.co.uk"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
@@ -287,13 +289,44 @@ except Exception as e:
     print(f"✗ x402 server initialization FAILED: {e}")
     raise RuntimeError(f"x402 initialization failed: {e}") from e
 
+def api_description() -> str:
+    """Public description. Prices come from the constants used by the paid routes."""
+    return (
+        "Pay-per-call web data for AI agents, settled in USDC on Base mainnet. "
+        f"POST /scrape returns clean markdown ({SCRAPE_PRICE}). "
+        f"POST /extract returns named JSON fields ({EXTRACT_PRICE}). "
+        f"POST /extract/property returns UK commercial property data ({PROPERTY_PRICE}). "
+        f"GET /v1/uk/tenders returns UK public tender notices from Find a Tender and "
+        f"Contracts Finder, up to 25 results ({TENDER_PRICE}). "
+        "GET /v1/uk/grants is free and does not republish competition text. "
+        "A call without payment returns HTTP 402. "
+        "Failed calls are not settled and credits are not deducted."
+    )
+
+
+def api_guidance() -> str:
+    """Agent guidance for OpenAPI info.x-guidance."""
+    return (
+        "Send the request with no payment first. Read the PAYMENT-REQUIRED header "
+        "on the HTTP 402 response, sign an x402 v2 USDC transfer on Base (eip155:8453), "
+        "and retry with the PAYMENT-SIGNATURE header. "
+        f"POST /scrape ({SCRAPE_PRICE}) takes url and optional js_render and returns markdown. "
+        f"POST /extract ({EXTRACT_PRICE}) takes url and fields and returns JSON. "
+        f"POST /extract/property ({PROPERTY_PRICE}) takes a UK listing url. "
+        f"GET /v1/uk/tenders ({TENDER_PRICE}) takes q, region, updated_from, stage, "
+        "limit (1 to 25), and cursor. "
+        "An API key in Authorization: Bearer is accepted instead of x402. "
+        "Payment is taken only when the response is successful and contains usable content."
+    )
+
+
 # FastAPI App
 app = FastAPI(
-    title="TerraDeed Scrape API",
-    description="x402-powered web data for AI agents. Clean LLM-ready markdown (/scrape), structured JSON from any URL (/extract), UK commercial property intelligence (/extract/property), and UK public tender notices from Find a Tender and Contracts Finder (/v1/uk/tenders). No accounts, no subscriptions — pay per call with USDC on Base mainnet.",
+    title=API_TITLE,
+    description=api_description(),
     version=APP_VERSION,
     contact={
-        "name": "TerraDeed Labs",
+        "name": "Terradeed",
         "email": "contact@terradeed.co.uk",
         "url": "https://terradeed.co.uk",
     },
@@ -1483,7 +1516,7 @@ async def scrape(body: ScrapeRequest, request: Request):
 @app.post("/extract/property")
 async def extract_property(body: PropertyExtractRequest, request: Request):
     """Extract structured commercial property data from a listing URL.
-    Fixed schema — no fields parameter needed. Returns normalised property
+    Fixed schema. No fields parameter is needed. Returns normalised property
     intelligence with confidence scores per field."""
 
     # Check for API key auth
@@ -1952,43 +1985,220 @@ async def get_key_status(key_prefix: str, request: Request):
             "is_active": bool(row["is_active"])
         }
 
-# Override OpenAPI schema to mark free endpoints as requiring no security
-# (avoids x402scan probing them and getting 405 errors)
+def usd_amount_from_atomic(atomic: str) -> str:
+    """Decimal USD for discovery documents. Runtime x402 amounts stay atomic."""
+    minor = int(atomic)
+    scale = 10 ** USDC_DECIMALS
+    whole, frac = divmod(minor, scale)
+    return f"{whole}.{frac:0{USDC_DECIMALS}d}"
+
+
+def discovery_catalog() -> list[dict]:
+    """Paid routes, prices, and 402 requirements. Discovery documents share this list."""
+    return [
+        {
+            "method": "POST",
+            "path": "/scrape",
+            "price_label": SCRAPE_PRICE,
+            "requirements": SCRAPE_REQUIREMENTS,
+            "summary": "Clean markdown from a public URL",
+            "price_note": f"**Price:** {SCRAPE_PRICE} USDC per call.",
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string"},
+                    "url": {"type": "string"},
+                    "status": {"type": "string"},
+                    "word_count": {"type": "integer"},
+                    "title": {"type": ["string", "null"]},
+                    "js_rendered": {"type": "boolean"},
+                    "auth_method": {"type": "string"},
+                },
+                "required": ["content", "url", "status"],
+            },
+        },
+        {
+            "method": "POST",
+            "path": "/extract",
+            "price_label": EXTRACT_PRICE,
+            "requirements": EXTRACT_REQUIREMENTS,
+            "summary": "Named JSON fields from a public URL",
+            "price_note": f"**Price:** {EXTRACT_PRICE} USDC per call.",
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "status": {"type": "string"},
+                    "data": {"type": "object"},
+                    "fields_requested": {"type": "array", "items": {"type": "string"}},
+                    "fields_extracted": {"type": "array", "items": {"type": "string"}},
+                    "auth_method": {"type": "string"},
+                },
+                "required": ["url", "status", "data"],
+            },
+        },
+        {
+            "method": "POST",
+            "path": "/extract/property",
+            "price_label": PROPERTY_PRICE,
+            "requirements": PROPERTY_REQUIREMENTS,
+            "summary": "UK commercial property data from a listing URL",
+            "price_note": f"**Price:** {PROPERTY_PRICE} USDC per call.",
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "status": {"type": "string"},
+                    "listing_type": {"type": ["string", "null"]},
+                    "property": {"type": "object"},
+                    "vendor": {"type": "object"},
+                    "auth_method": {"type": "string"},
+                },
+                "required": ["url", "status", "property"],
+            },
+        },
+        {
+            "method": "GET",
+            "path": "/v1/uk/tenders",
+            "price_label": TENDER_PRICE,
+            "requirements": TENDER_REQUIREMENTS,
+            "summary": "UK public tender notices, up to 25 results",
+            "price_note": f"**Price:** {TENDER_PRICE} USDC per search (up to 25 results).",
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "licence": {"type": "string"},
+                    "attribution": {"type": "string"},
+                    "sources": {"type": "array", "items": {"type": "string"}},
+                    "results": {"type": "array", "items": {"type": "object"}},
+                    "next_cursor": {"type": ["string", "null"]},
+                    "auth_method": {"type": "string"},
+                },
+                "required": ["licence", "results"],
+            },
+        },
+    ]
+
+
+def _payment_info(requirements: dict) -> dict:
+    return {
+        "price": {
+            "mode": "fixed",
+            "currency": "USD",
+            "amount": usd_amount_from_atomic(requirements["amount"]),
+        },
+        "protocols": [{"x402": {}}],
+    }
+
+
+def _accepts_entry(requirements: dict) -> dict:
+    """Same fields the 402 challenge puts in accepts[]. Amount stays atomic."""
+    return {
+        "scheme": requirements["scheme"],
+        "network": requirements["network"],
+        "asset": requirements["asset"],
+        "amount": requirements["amount"],
+        "payTo": requirements["payTo"],
+        "maxTimeoutSeconds": requirements["maxTimeoutSeconds"],
+        "extra": requirements["extra"],
+    }
+
+
+def well_known_x402_document() -> dict:
+    """x402 v2 capability manifest for /.well-known/x402."""
+    resources = []
+    for route in discovery_catalog():
+        resources.append({
+            "url": f"{BASE_URL}{route['path']}",
+            "path": route["path"],
+            "method": route["method"],
+            "description": route["summary"],
+            "price": _payment_info(route["requirements"])["price"],
+            "accepts": [_accepts_entry(route["requirements"])],
+        })
+    return {
+        "x402Version": 2,
+        "kind": "resource-server",
+        "name": API_TITLE,
+        "description": api_description(),
+        "resources": resources,
+        "openapi": f"{BASE_URL}/openapi.json",
+        "docs": f"{BASE_URL}/docs",
+        "contact": "contact@terradeed.co.uk",
+    }
+
+
+@app.get("/.well-known/x402")
+async def well_known_x402():
+    """x402 v2 capability manifest. Lists the same paid routes as /openapi.json."""
+    return JSONResponse(
+        content=well_known_x402_document(),
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+_OPENAPI_METHODS = {"get", "post", "put", "delete", "patch", "head", "options", "trace"}
+
+
 def custom_openapi():
+    """OpenAPI document for x402scan: payment info, 402 responses, free routes marked."""
     if app.openapi_schema:
         return app.openapi_schema
+    app.description = api_description()
     openapi_schema = get_openapi(
-        title=app.title,
+        title=API_TITLE,
         version=app.version,
         description=app.description,
         routes=app.routes,
     )
-    free_paths = ["/health", "/", "/admin/keys", "/admin/keys/{key_prefix}", "/v1/uk/grants"]
-    for path in free_paths:
-        if path in openapi_schema.get("paths", {}):
-            for method in openapi_schema["paths"][path]:
-                if method in ("get", "post", "put", "delete", "patch"):
-                    openapi_schema["paths"][path][method]["security"] = []
-    # Add per-call pricing to paid endpoints
-    pricing = {
-        "/scrape": SCRAPE_PRICE,
-        "/extract": EXTRACT_PRICE,
-        "/extract/property": PROPERTY_PRICE,
+    info = openapi_schema.setdefault("info", {})
+    info["title"] = API_TITLE
+    info["description"] = app.description
+    info["x-guidance"] = api_guidance()
+    info["contact"] = {
+        "name": "Terradeed",
+        "email": "contact@terradeed.co.uk",
+        "url": "https://terradeed.co.uk",
     }
-    for path, price in pricing.items():
-        if path in openapi_schema.get("paths", {}):
-            for method in openapi_schema["paths"][path]:
-                if method == "post":
-                    desc = openapi_schema["paths"][path][method].get("description", "")
-                    openapi_schema["paths"][path][method]["description"] = f"{desc}\n\n**Price:** {price} USDC per call."
-    tender_path = "/v1/uk/tenders"
-    if tender_path in openapi_schema.get("paths", {}):
-        for method in openapi_schema["paths"][tender_path]:
-            if method == "get":
-                desc = openapi_schema["paths"][tender_path][method].get("description", "")
-                openapi_schema["paths"][tender_path][method]["description"] = (
-                    f"{desc}\n\n**Price:** {TENDER_PRICE} USDC per search (up to 25 results)."
-                )
+    components = openapi_schema.setdefault("components", {})
+    schemes = components.setdefault("securitySchemes", {})
+    schemes["x402"] = {
+        "type": "apiKey",
+        "in": "header",
+        "name": "PAYMENT-SIGNATURE",
+        "description": "x402 v2 payment signature. USDC on Base mainnet (eip155:8453).",
+    }
+    schemes["apiKey"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API key",
+        "description": "Terradeed API key. Credits are deducted only after a usable success.",
+    }
+
+    catalog = {(route["method"], route["path"]): route for route in discovery_catalog()}
+    for path, methods in openapi_schema.get("paths", {}).items():
+        for method, operation in methods.items():
+            if method not in _OPENAPI_METHODS or not isinstance(operation, dict):
+                continue
+            route = catalog.get((method.upper(), path))
+            if route is None:
+                operation["security"] = []
+                continue
+            operation["summary"] = route["summary"]
+            operation["x-payment-info"] = _payment_info(route["requirements"])
+            operation["security"] = [{"x402": []}, {"apiKey": []}]
+            description = operation.get("description") or ""
+            note = route["price_note"]
+            if note not in description:
+                operation["description"] = f"{description}\n\n{note}".strip()
+            responses = operation.setdefault("responses", {})
+            responses["402"] = {"description": "Payment Required"}
+            success = responses.setdefault("200", {"description": "Successful response"})
+            content = success.setdefault("content", {}).setdefault("application/json", {})
+            schema = content.get("schema")
+            if not schema or schema == {}:
+                content["schema"] = route["output_schema"]
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
