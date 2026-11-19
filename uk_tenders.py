@@ -896,8 +896,11 @@ class TenderService:
         max_pages = MAX_PAGES_FILTERED if params["local_filter"] else MAX_PAGES_BROAD
 
         async def fetch_fts_stages() -> dict:
-            outcomes = []
-            for one_stage in fts_stages:
+            # Each stage is its own request, and a filtered stage can take two
+            # 20s pages. Run the stages together so one slow call does not
+            # hold up the others. return_exceptions keeps a failure in one
+            # stage from cancelling the rest.
+            async def fetch_one(one_stage: str) -> dict:
                 url = FTS_API + "?" + urlencode(
                     {
                         "updatedFrom": params["updated_from"],
@@ -906,7 +909,27 @@ class TenderService:
                         "limit": UPSTREAM_PAGE_SIZE,
                     }
                 )
-                outcomes.append(await self._fetch_source("find-tender", url, max_pages))
+                return await self._fetch_source("find-tender", url, max_pages)
+
+            gathered = await asyncio.gather(
+                *(fetch_one(one_stage) for one_stage in fts_stages),
+                return_exceptions=True,
+            )
+            outcomes = []
+            for item in gathered:
+                if isinstance(item, BaseException):
+                    if isinstance(item, (asyncio.CancelledError, KeyboardInterrupt)):
+                        raise item
+                    outcomes.append(
+                        {
+                            "releases": [],
+                            "pages": 0,
+                            "truncated": False,
+                            "error": f"find-tender unavailable ({item})",
+                        }
+                    )
+                    continue
+                outcomes.append(item)
             return _merge_fetch_outcomes(outcomes)
 
         cf_url = CF_API + "?" + urlencode(

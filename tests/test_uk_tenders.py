@@ -298,15 +298,25 @@ async def test_filtered_search_reads_a_second_page_and_stops():
         "https://www.find-tender.service.gov.uk/api/1.0/ocdsReleasePackages?"
         "cursor=page2"
     )
-    router = _Router(
-        fts_pages=[_package([noise], next_url=next_url), _package([match])],
-        cf_pages=[_package([])],
-    )
-    result = await _service(router).search(q="library staff")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        handler.calls.append(url)
+        if "contractsfinder" in url:
+            return httpx.Response(200, json=_package([]))
+        if "cursor=page2" in url:
+            return httpx.Response(200, json=_package([match]))
+        if request.url.params.get("stages") == "planning":
+            return httpx.Response(200, json=_package([noise], next_url=next_url))
+        return httpx.Response(200, json=_package([]))
+
+    handler.calls = []
+    service = TenderService(transport=httpx.MockTransport(handler), min_interval=0)
+    result = await service.search(q="library staff")
 
     assert [item["ocid"] for item in result["results"]] == ["ocds-h6vhtk-match"]
-    assert sum("find-tender" in url for url in router.calls) == 4
-    assert any("cursor=page2" in url for url in router.calls)
+    assert sum("find-tender" in url for url in handler.calls) == 4
+    assert any("cursor=page2" in url for url in handler.calls)
     assert result["coverage"]["truncated"] is False
 
 
@@ -527,3 +537,37 @@ async def test_explicit_stage_queries_find_a_tender_once():
 
     assert sorted(handler.calls) == ["award", "award"]
     assert [item["stage"] for item in result["results"]] == ["award"]
+
+
+@pytest.mark.asyncio
+async def test_one_fts_stage_exception_keeps_the_other_stages():
+    """gather(return_exceptions=True) must not drop stages that succeeded."""
+    calls = []
+
+    async def fetch(source, url, max_pages):
+        if source == "contracts-finder":
+            return {"releases": [], "pages": 1, "truncated": False, "error": None}
+        stage = url.split("stages=", 1)[1].split("&", 1)[0]
+        calls.append(stage)
+        if stage == "tender":
+            raise RuntimeError("tender down")
+        release = _fts_release(
+            ocid=f"ocds-h6vhtk-{stage}",
+            id=f"00000{len(stage)}-2026",
+            date="2026-11-03T00:00:00Z",
+            tag=[stage],
+        )
+        release["tender"]["title"] = f"{stage} notice"
+        return {"releases": [release], "pages": 1, "truncated": False, "error": None}
+
+    service = TenderService(min_interval=0)
+    service._fetch_source = fetch
+    result = await service.search()
+
+    assert set(calls) == {"planning", "tender", "award"}
+    by_ocid = {item["ocid"]: item for item in result["results"]}
+    assert set(by_ocid) == {"ocds-h6vhtk-planning", "ocds-h6vhtk-award"}
+    assert by_ocid["ocds-h6vhtk-planning"]["title"] == "planning notice"
+    assert by_ocid["ocds-h6vhtk-award"]["title"] == "award notice"
+    assert any("tender down" in warning for warning in result["warnings"])
+    assert result["sources"] == ["find-tender", "contracts-finder"]
