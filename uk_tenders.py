@@ -610,6 +610,44 @@ def _public_card(card: dict) -> dict:
     return {field: card[field] for field in PUBLIC_FIELDS}
 
 
+def _merge_fetch_outcomes(outcomes: list[dict]) -> dict:
+    """Merge per-stage fetches of one source.
+
+    Releases are concatenated for the caller's ocid dedupe. One failed stage
+    does not drop stages that returned a package. Every stage failing is an
+    error for the source.
+    """
+    releases: list[dict] = []
+    pages = 0
+    truncated = False
+    errors: list[str] = []
+    any_ok = False
+    for outcome in outcomes:
+        pages += outcome["pages"]
+        truncated = truncated or bool(outcome["truncated"])
+        if outcome["error"]:
+            errors.append(outcome["error"])
+            continue
+        any_ok = True
+        releases.extend(outcome["releases"])
+    unique_errors = list(dict.fromkeys(errors))
+    if any_ok:
+        return {
+            "releases": releases,
+            "pages": pages,
+            "truncated": truncated,
+            "error": None,
+            "warnings": unique_errors,
+        }
+    return {
+        "releases": [],
+        "pages": pages,
+        "truncated": truncated,
+        "error": unique_errors[0] if unique_errors else None,
+        "warnings": [],
+    }
+
+
 def normalise_updated_from(value: str) -> str:
     text = value.strip()
     if not UPDATED_FROM_RE.fullmatch(text):
@@ -849,26 +887,38 @@ class TenderService:
             self._result_cache.pop(next(iter(self._result_cache)))
 
     async def _collect(self, params: dict) -> dict:
-        stages = params["stage"] or "planning,tender,award"
+        # Find a Tender returns an empty package for stages=planning,tender,award.
+        # Each stage has to be requested on its own. Contracts Finder accepts
+        # the comma-separated list, so that source stays one request.
+        stage = params["stage"]
+        fts_stages = [stage] if stage else list(STAGES)
+        cf_stages = stage or ",".join(STAGES)
         max_pages = MAX_PAGES_FILTERED if params["local_filter"] else MAX_PAGES_BROAD
-        fts_url = FTS_API + "?" + urlencode(
-            {
-                "updatedFrom": params["updated_from"],
-                "updatedTo": params["updated_to"],
-                "stages": stages,
-                "limit": UPSTREAM_PAGE_SIZE,
-            }
-        )
+
+        async def fetch_fts_stages() -> dict:
+            outcomes = []
+            for one_stage in fts_stages:
+                url = FTS_API + "?" + urlencode(
+                    {
+                        "updatedFrom": params["updated_from"],
+                        "updatedTo": params["updated_to"],
+                        "stages": one_stage,
+                        "limit": UPSTREAM_PAGE_SIZE,
+                    }
+                )
+                outcomes.append(await self._fetch_source("find-tender", url, max_pages))
+            return _merge_fetch_outcomes(outcomes)
+
         cf_url = CF_API + "?" + urlencode(
             {
                 "publishedFrom": params["updated_from"],
                 "publishedTo": params["updated_to"],
-                "stages": stages,
+                "stages": cf_stages,
                 "limit": UPSTREAM_PAGE_SIZE,
             }
         )
         fts, cf = await asyncio.gather(
-            self._fetch_source("find-tender", fts_url, max_pages),
+            fetch_fts_stages(),
             self._fetch_source("contracts-finder", cf_url, max_pages),
         )
         warnings: list[str] = []
@@ -883,6 +933,7 @@ class TenderService:
                 if outcome["truncated"]:
                     truncated = True
                 continue
+            warnings.extend(outcome.get("warnings") or [])
             sources.append(name)
             truncated = truncated or outcome["truncated"]
             for release in outcome["releases"]:
