@@ -139,6 +139,11 @@ def test_readme_promises_only_served_discovery_documents():
     assert "/openapi.json" in readme
     assert "/.well-known/x402" in readme
     assert "bazaar.json" not in readme
+    assert "58838" not in readme
+    assert "search_endpoints" not in readme
+    assert "Agentic Market" not in readme
+    assert "Coinbase CDP x402 Bazaar" in readme
+    assert "https://www.x402scan.com" in readme
     for dash in DASHES:
         assert dash not in readme
 

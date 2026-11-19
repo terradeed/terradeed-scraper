@@ -175,7 +175,7 @@ GET https://api.terradeed.co.uk/health              # Health and capabilities
 GET https://api.terradeed.co.uk/docs                # Interactive API docs
 ```
 
-`/openapi.json` and `/.well-known/x402` list the same paid routes and prices. Indexed in the [Agentic Market catalogue](https://onyx-actions.onrender.com/bazaar), ID 58838. Discoverable via `mapper-mcp search_endpoints` with `terradeed` from any MCP client.
+`/openapi.json` and `/.well-known/x402` list the same paid routes and prices. Listed in the Coinbase CDP x402 Bazaar and on [x402scan](https://www.x402scan.com).
 
 ---
 
@@ -183,7 +183,6 @@ GET https://api.terradeed.co.uk/docs                # Interactive API docs
 
 - Strict-v2 spec-valid (verified by [mapper-mcp](https://github.com/TomSmart-ai))
 - 402 response includes full `accepts` array per x402 v2 spec
-- Catalogue: 6/6 transport, 8/8 payment, 5/5 extension score
 
 ---
 
