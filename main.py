@@ -1,7 +1,7 @@
 """
 TerraDeed Labs - Web Scraping API
 Dual Authentication: x402 USDC + API Keys
-Version 0.9.0 - UK public tenders feed (Find a Tender + Contracts Finder, OGL)
+Version 0.10.0 - UK company lookup and search (Companies House public register)
 """
 
 import asyncio
@@ -36,6 +36,12 @@ from x402.extensions.bazaar import (
 
 from enrichment import enrich_property
 from uk_tenders import TenderQueryError, TenderService, TenderUpstreamError, grants_stub
+from uk_companies import (
+    CompanyNotFound,
+    CompanyQueryError,
+    CompanyService,
+    CompanyUpstreamError,
+)
 
 # Config
 PAY_TO = "0x4E024e356bd01853654b7B5196F2B85F67Cc39EC"
@@ -47,7 +53,9 @@ PROPERTY_PRICE = "$0.10"
 PROPERTY_CREDITS = 10
 TENDER_PRICE = "$0.02"
 TENDER_CREDITS = 2
-APP_VERSION = "0.9.0"
+COMPANY_PRICE = "$0.01"
+COMPANY_CREDITS = 1
+APP_VERSION = "0.10.0"
 API_TITLE = "Terradeed Scrape API"
 USDC_DECIMALS = 6
 NETWORK_CLIENT = "base"
@@ -278,22 +286,62 @@ facilitator_clients.append(HTTPFacilitatorClient(FacilitatorConfig(
     identifier="xpay",
 )))
 
+ALL_FACILITATOR_CLIENTS = list(facilitator_clients)
+X402_REINIT_INTERVAL_SECONDS = 60.0
+_x402_last_init_attempt = 0.0
+
+
+def _healthy_facilitators(clients: list) -> list:
+    """Facilitators whose /supported answers now. One outage must not stop the API."""
+    healthy = []
+    for client in clients:
+        try:
+            client.get_supported()
+            healthy.append(client)
+        except Exception as exc:
+            print(f"Warning: facilitator {getattr(client, 'identifier', client)} unavailable: {exc}")
+    return healthy
+
+
+def _initialise_x402(server) -> bool:
+    """Initialise with the facilitators that are up. Returns True when ready."""
+    global _x402_last_init_attempt
+    import time as _time
+    _x402_last_init_attempt = _time.monotonic()
+    healthy = _healthy_facilitators(ALL_FACILITATOR_CLIENTS)
+    if not healthy:
+        print("✗ x402 server initialization FAILED: no facilitator is reachable. Paid routes retry on demand.")
+        return False
+    server._facilitator_clients = healthy
+    try:
+        server.initialize()
+    except Exception as exc:
+        print(f"✗ x402 server initialization FAILED: {exc}. Paid routes retry on demand.")
+        return False
+    print(f"✓ x402 server initialized with {len(healthy)} facilitators")
+    # Log the routing map once so there is never any doubt about
+    # which facilitator owns which network/scheme:
+    for network, schemes in server._facilitator_clients_map.items():
+        for scheme, client in schemes.items():
+            print(f"  route: {network}/{scheme} -> {getattr(client, 'identifier', client)}")
+    return True
+
+
+def _ensure_x402_ready() -> None:
+    """Retry initialisation at most once a minute while no facilitator is loaded."""
+    if getattr(x402_server, "_initialized", False):
+        return
+    import time as _time
+    if _time.monotonic() - _x402_last_init_attempt < X402_REINIT_INTERVAL_SECONDS:
+        return
+    _initialise_x402(x402_server)
+
+
 x402_server = x402ResourceServer(facilitator_clients=facilitator_clients)
 x402_server.register("eip155:8453", ExactEvmServerScheme())
 x402_server.register("base", ExactEvmServerScheme())
 x402_server.register_extension(bazaar_resource_server_extension)
-
-try:
-    x402_server.initialize()
-    print(f"✓ x402 server initialized with {len(x402_server._facilitator_clients)} facilitators")
-    # Log the routing map once at boot so there is never any doubt about
-    # which facilitator owns which network/scheme:
-    for network, schemes in x402_server._facilitator_clients_map.items():
-        for scheme, client in schemes.items():
-            print(f"  route: {network}/{scheme} -> {getattr(client, 'identifier', client)}")
-except Exception as e:
-    print(f"✗ x402 server initialization FAILED: {e}")
-    raise RuntimeError(f"x402 initialization failed: {e}") from e
+_initialise_x402(x402_server)
 
 def api_description() -> str:
     """Public description. Prices come from the constants used by the paid routes."""
@@ -304,6 +352,9 @@ def api_description() -> str:
         f"POST /extract/property returns UK commercial property data ({PROPERTY_PRICE}). "
         f"GET /v1/uk/tenders returns UK public tender notices from Find a Tender and "
         f"Contracts Finder, up to 25 results ({TENDER_PRICE}). "
+        f"GET /v1/uk/company returns a UK company profile with status, overdue flags, "
+        f"SIC codes and recent filings from Companies House ({COMPANY_PRICE}). "
+        f"GET /v1/uk/company/search finds UK companies by name ({COMPANY_PRICE}). "
         "GET /v1/uk/grants is free and does not republish competition text. "
         "A call without payment returns HTTP 402. "
         "Failed calls are not settled and credits are not deducted."
@@ -321,6 +372,9 @@ def api_guidance() -> str:
         f"POST /extract/property ({PROPERTY_PRICE}) takes a UK listing url. "
         f"GET /v1/uk/tenders ({TENDER_PRICE}) takes q, region, updated_from, stage, "
         "limit (1 to 25), and cursor. "
+        f"GET /v1/uk/company ({COMPANY_PRICE}) takes number (Companies House company "
+        "number, for example 00445790) and optional filings (0 to 25, default 10). "
+        f"GET /v1/uk/company/search ({COMPANY_PRICE}) takes q and optional limit (1 to 20). "
         "An API key in Authorization: Bearer is accepted instead of x402. "
         "Payment is taken only when the response is successful and contains usable content."
     )
@@ -731,7 +785,163 @@ TENDER_BAZAAR_EXT = {
     }
 }
 
+COMPANY_RESOURCE = {
+    "url": f"{BASE_URL}/v1/uk/company",
+    "description": "UK company profile from the Companies House public register: name, status, type, incorporation and dissolution dates, registered office, SIC codes, previous names, accounts and confirmation statement due dates with overdue flags, and recent filings. Company-level data only: officer and PSC names are omitted.",
+    "mimeType": "application/json",
+}
+
+COMPANY_REQUIREMENTS = {
+    "scheme": "exact",
+    "network": "eip155:8453",
+    "asset": USDC_BASE,
+    "amount": "10000",  # $0.01 in atomic units
+    "payTo": PAY_TO,
+    "maxTimeoutSeconds": 300,
+    "extra": {"name": "USD Coin", "version": "2"},
+}
+
+_COMPANY_EXAMPLE = {
+    "source": "companies-house",
+    "licence": "Companies-House-public-register",
+    "attribution": "Source: Companies House public register.",
+    "company": {
+        "company_number": "00445790",
+        "name": "TESCO PLC",
+        "status": "active",
+        "status_detail": None,
+        "type": "Public limited Company",
+        "date_of_creation": "1947-11-27",
+        "date_of_cessation": None,
+        "registered_office_address": "Tesco House, Shire Park, Kestrel Way, Welwyn Garden City, United Kingdom, AL7 1GA",
+        "sic_codes": [{"code": "47110", "description": "Retail sale in non-specialised stores with food, beverages or tobacco predominating"}],
+        "accounts": {"next_made_up_to": "2027-02-26", "next_due": "2027-08-26", "last_made_up_to": "2026-02-28", "overdue": False},
+        "confirmation_statement": {"next_made_up_to": "2027-06-18", "next_due": "2027-07-02", "last_made_up_to": "2026-06-18", "overdue": False},
+    },
+    "filings": [
+        {"date": "2026-11-24", "type": "SH06", "category": "capital", "description": "Cancellation of shares. Statement of capital on 23 November 2026", "document_url": "https://find-and-update.company-information.service.gov.uk/company/00445790/filing-history/..."},
+        {"date": "2026-11-09", "type": "AP01", "category": "officers", "description": "Officer filing (name omitted)", "document_url": None},
+    ],
+    "source_url": "https://find-and-update.company-information.service.gov.uk/company/00445790",
+    "auth_method": "x402",
+}
+
+COMPANY_BAZAAR_EXT = {
+    "bazaar": {
+        "info": {
+            "input": {
+                "type": "http",
+                "method": "GET",
+                "queryParams": {"number": "00445790", "filings": 10},
+            },
+            "output": {"type": "json", "example": _COMPANY_EXAMPLE},
+        },
+        "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "http"},
+                        "method": {"type": "string", "enum": ["GET", "HEAD", "DELETE"]},
+                        "queryParams": {
+                            "type": "object",
+                            "properties": {
+                                "number": {"type": "string", "description": "Companies House company number, for example 00445790 or SC540749"},
+                                "filings": {"type": "integer", "minimum": 0, "maximum": 25},
+                            },
+                            "required": ["number"],
+                        },
+                    },
+                    "required": ["type", "method"],
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "example": {"type": "object"},
+                    },
+                },
+            },
+            "required": ["input"],
+        },
+    }
+}
+
+COMPANY_SEARCH_RESOURCE = {
+    "url": f"{BASE_URL}/v1/uk/company/search",
+    "description": "Find UK companies by name on the Companies House public register. Up to 20 matches with company number, incorporation or dissolution date, and registered office. Use the number with /v1/uk/company for the full profile.",
+    "mimeType": "application/json",
+}
+
+COMPANY_SEARCH_REQUIREMENTS = dict(COMPANY_REQUIREMENTS)
+
+COMPANY_SEARCH_BAZAAR_EXT = {
+    "bazaar": {
+        "info": {
+            "input": {
+                "type": "http",
+                "method": "GET",
+                "queryParams": {"q": "tesco", "limit": 10},
+            },
+            "output": {
+                "type": "json",
+                "example": {
+                    "source": "companies-house",
+                    "licence": "Companies-House-public-register",
+                    "attribution": "Source: Companies House public register.",
+                    "query": {"q": "tesco", "limit": 10},
+                    "results": [
+                        {
+                            "company_number": "00445790",
+                            "name": "TESCO PLC",
+                            "date_of_creation": "1947-11-27",
+                            "date_of_cessation": None,
+                            "dissolved": False,
+                            "registered_office_address": "Tesco House, Shire Park, Kestrel Way, Welwyn Garden City, United Kingdom, AL7 1GA",
+                            "url": "https://find-and-update.company-information.service.gov.uk/company/00445790",
+                        }
+                    ],
+                    "auth_method": "x402",
+                },
+            },
+        },
+        "schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "const": "http"},
+                        "method": {"type": "string", "enum": ["GET", "HEAD", "DELETE"]},
+                        "queryParams": {
+                            "type": "object",
+                            "properties": {
+                                "q": {"type": "string", "minLength": 2},
+                                "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                            },
+                            "required": ["q"],
+                        },
+                    },
+                    "required": ["type", "method"],
+                },
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string"},
+                        "example": {"type": "object"},
+                    },
+                },
+            },
+            "required": ["input"],
+        },
+    }
+}
+
 tender_service = TenderService()
+company_service = CompanyService()
 
 # Models
 class ScrapeRequest(BaseModel):
@@ -1370,6 +1580,10 @@ def _payment_for(path: str):
         return EXTRACT_REQUIREMENTS, EXTRACT_RESOURCE, EXTRACT_BAZAAR_EXT
     if path == "/v1/uk/tenders":
         return TENDER_REQUIREMENTS, TENDER_RESOURCE, TENDER_BAZAAR_EXT
+    if path == "/v1/uk/company":
+        return COMPANY_REQUIREMENTS, COMPANY_RESOURCE, COMPANY_BAZAAR_EXT
+    if path == "/v1/uk/company/search":
+        return COMPANY_SEARCH_REQUIREMENTS, COMPANY_SEARCH_RESOURCE, COMPANY_SEARCH_BAZAAR_EXT
     return None
 
 
@@ -1378,6 +1592,8 @@ PAID_ROUTES = {
     ("POST", "/extract"),
     ("POST", "/extract/property"),
     ("GET", "/v1/uk/tenders"),
+    ("GET", "/v1/uk/company"),
+    ("GET", "/v1/uk/company/search"),
 }
 
 # Returned when a handler produces 2xx without content worth paying for.
@@ -1437,6 +1653,16 @@ def _payload_is_usable(path: str, payload: Any) -> bool:
             and _value_is_usable(prop)
         )
     if path == "/v1/uk/tenders":
+        licence = payload.get("licence")
+        return isinstance(payload.get("results"), list) and isinstance(licence, str) and bool(licence.strip())
+    if path == "/v1/uk/company":
+        company = payload.get("company")
+        return (
+            isinstance(company, dict)
+            and _value_is_usable(company.get("company_number"))
+            and _value_is_usable(company.get("name"))
+        )
+    if path == "/v1/uk/company/search":
         licence = payload.get("licence")
         return isinstance(payload.get("results"), list) and isinstance(licence, str) and bool(licence.strip())
     return False
@@ -1611,6 +1837,7 @@ async def x402_auth_middleware(request: Request, call_next):
                     )
                     
                     # Verify payment (async server)
+                    await asyncio.to_thread(_ensure_x402_ready)
                     result = await x402_server.verify_payment(payload, requirements)
                     
                     print(f"Payment verification result: {result}")
@@ -1835,6 +2062,86 @@ async def uk_tenders(
     return result
 
 
+def _company_auth(request: Request, auth_method: str, api_key: Optional[str]):
+    """Shared auth for the company routes. Returns a 402 response or None."""
+    if auth_method == "api_key":
+        key_info = validate_api_key(api_key)
+        if not key_info:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        if "error" in key_info:
+            raise HTTPException(status_code=401, detail=key_info["error"])
+        if key_info["credits_remaining"] < COMPANY_CREDITS:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "Insufficient credits",
+                    "credits_remaining": key_info["credits_remaining"],
+                    "credits_required": COMPANY_CREDITS,
+                },
+            )
+        _arm_credit_charge(request, api_key, key_info, COMPANY_CREDITS)
+        return None
+    if not getattr(request.state, "x402_payment_valid", False):
+        requirements, resource, bazaar = _payment_for(request.url.path)
+        return payment_required_response(requirements, resource, bazaar)
+    return None
+
+
+@app.get("/v1/uk/company")
+async def uk_company(
+    request: Request,
+    number: Optional[str] = None,
+    filings: int = 10,
+):
+    """UK company profile from the Companies House public register.
+
+    $0.01 USDC per lookup. Returns name, status, type, incorporation and
+    dissolution dates, registered office, SIC codes, previous names, accounts
+    and confirmation statement due dates with overdue flags, and up to 25
+    recent filings. Officer and PSC names are omitted. An unknown company
+    number returns 404 and is not charged.
+    """
+    auth_method, api_key = await get_auth_method(request)
+    unpaid = _company_auth(request, auth_method, api_key)
+    if unpaid is not None:
+        return unpaid
+    try:
+        result = await company_service.lookup(number=number, filings=filings)
+    except CompanyQueryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CompanyNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CompanyUpstreamError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    result["auth_method"] = "api_key" if auth_method == "api_key" else "x402"
+    return result
+
+
+@app.get("/v1/uk/company/search")
+async def uk_company_search(
+    request: Request,
+    q: Optional[str] = None,
+    limit: int = 10,
+):
+    """Find UK companies by name on the Companies House public register.
+
+    $0.01 USDC per search, up to 20 matches. Pass a result's company_number
+    to GET /v1/uk/company for the full profile and filings.
+    """
+    auth_method, api_key = await get_auth_method(request)
+    unpaid = _company_auth(request, auth_method, api_key)
+    if unpaid is not None:
+        return unpaid
+    try:
+        result = await company_service.search(q=q, limit=limit)
+    except CompanyQueryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CompanyUpstreamError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    result["auth_method"] = "api_key" if auth_method == "api_key" else "x402"
+    return result
+
+
 @app.get("/v1/uk/grants")
 async def uk_grants(
     q: Optional[str] = None,
@@ -1873,6 +2180,8 @@ async def root():
             "extract": {"path": "/extract", "method": "POST", "price": EXTRACT_PRICE, "auth": ["x402", "api_key"]},
             "extract_property": {"path": "/extract/property", "method": "POST", "price": PROPERTY_PRICE, "auth": ["x402", "api_key"], "description": "UK commercial property intelligence. Attempts enrichment from government open data where available."},
             "uk_tenders": {"path": "/v1/uk/tenders", "method": "GET", "price": TENDER_PRICE, "auth": ["x402", "api_key"], "description": "UK public tender notices from Find a Tender and Contracts Finder. OGL v3.0. Up to 25 results."},
+            "uk_company": {"path": "/v1/uk/company", "method": "GET", "price": COMPANY_PRICE, "auth": ["x402", "api_key"], "description": "UK company profile from Companies House: status, overdue flags, SIC codes, recent filings. Officer names omitted."},
+            "uk_company_search": {"path": "/v1/uk/company/search", "method": "GET", "price": COMPANY_PRICE, "auth": ["x402", "api_key"], "description": "Find UK companies by name on the Companies House register. Up to 20 matches."},
             "uk_grants": {"path": "/v1/uk/grants", "method": "GET", "price": "free", "auth": [], "description": "v1 placeholder. Innovate UK text is not republished yet."},
             "health": {"path": "/health", "method": "GET"}
         }
@@ -1881,12 +2190,14 @@ async def root():
 # llms.txt — agent discovery (served at both /llms.txt and /.well-known/llms.txt)
 LLMS_TXT = """# TerraDeed Scrape API
 
-> x402-powered web data extraction for AI agents. Three endpoints that turn any URL into usable intelligence:
+> x402-powered web data and UK public data for AI agents. Pay per call, no account:
 > 
 > • `/scrape` — Clean, LLM-ready markdown from any URL. JavaScript rendering included. Feed web content directly into agent context without parsing HTML. $0.01 USDC.
 > • `/extract` — Structured JSON from any webpage. Name the fields you want — company data, job listings, product specs, contact details, financial figures — and get them back. No scraper configuration needed. $0.05 USDC.
 > • `/extract/property` — UK commercial property and land intelligence from any listing URL. Structured data: address, price, site area, use class, tenure, frontage, coordinates. Attempts enrichment from Environment Agency flood risk, Historic England listed buildings, and DLUHC EPC data where available. $0.10 USDC.
 > • `/v1/uk/tenders` — UK public tender notices from the Find a Tender and Contracts Finder OCDS APIs. Keyword, region, stage, and updated-from filters. Up to 25 results. Open Government Licence v3.0. Contact names, emails, and phone numbers are omitted. $0.02 USDC.
+> • `/v1/uk/company`: UK company profile from the Companies House public register: status, type, incorporation date, registered office, SIC codes, accounts and confirmation statement due dates with overdue flags, and recent filings. No Companies House API key needed. Officer names omitted. $0.01 USDC.
+> • `/v1/uk/company/search`: Find UK companies by name on the Companies House register. Up to 20 matches. $0.01 USDC.
 > 
 > No API keys, no accounts, no subscriptions — payment is per-request via the x402 protocol (HTTP 402) with USDC on Base mainnet. First byte to paid response in one retry cycle.
 
@@ -1899,6 +2210,7 @@ LLMS_TXT = """# TerraDeed Scrape API
 - You need the readable content of a web page as markdown for summarisation, RAG ingestion, or analysis → `POST /scrape` ($0.01)
 - You need specific named fields from a page as machine-usable JSON (prices, titles, contact details, specs, team structures) → `POST /extract` ($0.05)
 - You need structured UK commercial property intelligence with government data enrichment (flood risk, listed buildings, EPC) from any listing → `POST /extract/property` ($0.10)
+- You need to check a UK company (KYB, supplier or customer checks, lead enrichment, credit control): status, overdue accounts or confirmation statement, SIC codes, recent filings → `GET /v1/uk/company?number=...` ($0.01). Find the number first with `GET /v1/uk/company/search?q=...` ($0.01)
 - The page requires JavaScript rendering → add `"js_render": true` to any endpoint. If rendering fails, the API retries once and then falls back to a static fetch. The response sets `js_render_fallback` to true and includes `fallback_reason` instead of returning an empty HTTP 500.
 - You do NOT need this API for: pages you can fetch directly without markup cleanup, or sites that prohibit automated access in their terms
 
@@ -2071,6 +2383,21 @@ Query parameters:
 - `cursor` (string): `next_cursor` from the previous response. Repeat the same `q`, `region`, `updated_from`, and `stage`.
 
 The response includes `licence` `OGL-UK-3.0` and the attribution line required for Open Government Licence reuse. Contact names, emails, and telephone numbers are removed.
+
+### GET /v1/uk/company: $0.01 USDC
+
+UK company profile from the Companies House public register. No Companies House API key or account is needed.
+
+Query parameters:
+
+- `number` (string, required): Companies House company number, for example `00445790`, `SC540749`, or `OC123456`. Short numeric numbers are zero-padded.
+- `filings` (integer, default 10, 0 to 25): how many recent filings to include.
+
+Returns `company` (company_number, name, status, status_detail, type, date_of_creation, date_of_cessation, registered_office_address, sic_codes, previous_names, accounts and confirmation_statement with next_made_up_to, next_due, last_made_up_to, overdue) and `filings` (date, type, category, description, document_url). Company-level data only: officer and PSC filings keep their date and type, but the name is replaced with a neutral label and no document link is given. An unknown number returns 404 and is not charged.
+
+### GET /v1/uk/company/search: $0.01 USDC
+
+Find UK companies by name. Query parameters: `q` (string, required, 2 to 160 characters) and `limit` (integer, default 10, max 20). Each result has company_number, name, date_of_creation, date_of_cessation, dissolved, registered_office_address, matched_previous_name, and url. A search with no matches is still a completed search and is charged.
 
 `GET /v1/uk/grants` is free and currently returns no competition text.
 
@@ -2286,6 +2613,49 @@ def discovery_catalog() -> list[dict]:
                     "sources": {"type": "array", "items": {"type": "string"}},
                     "results": {"type": "array", "items": {"type": "object"}},
                     "next_cursor": {"type": ["string", "null"]},
+                    "auth_method": {"type": "string"},
+                },
+                "required": ["licence", "results"],
+            },
+        },
+        {
+            "method": "GET",
+            "path": "/v1/uk/company",
+            "price_label": COMPANY_PRICE,
+            "requirements": COMPANY_REQUIREMENTS,
+            "summary": "UK company profile and recent filings from Companies House",
+            "price_note": f"**Price:** {COMPANY_PRICE} USDC per company lookup.",
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "licence": {"type": "string"},
+                    "attribution": {"type": "string"},
+                    "company": {"type": "object"},
+                    "filings": {"type": "array", "items": {"type": "object"}},
+                    "filings_status": {"type": "string"},
+                    "source_url": {"type": "string"},
+                    "retrieved_at": {"type": "string"},
+                    "auth_method": {"type": "string"},
+                },
+                "required": ["licence", "company"],
+            },
+        },
+        {
+            "method": "GET",
+            "path": "/v1/uk/company/search",
+            "price_label": COMPANY_PRICE,
+            "requirements": COMPANY_SEARCH_REQUIREMENTS,
+            "summary": "Find UK companies by name on the Companies House register",
+            "price_note": f"**Price:** {COMPANY_PRICE} USDC per search (up to 20 results).",
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "licence": {"type": "string"},
+                    "attribution": {"type": "string"},
+                    "query": {"type": "object"},
+                    "results": {"type": "array", "items": {"type": "object"}},
                     "auth_method": {"type": "string"},
                 },
                 "required": ["licence", "results"],

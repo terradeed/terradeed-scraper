@@ -13,6 +13,8 @@ Pay-per-use web scraping and structured data extraction for AI agents. No API ke
 | `POST /scrape` | $0.01 USDC | Clean LLM-ready markdown from any URL |
 | `POST /extract` | $0.05 USDC | Schema-driven structured JSON: pass fields, receive typed values |
 | `GET /v1/uk/tenders` | $0.02 USDC | UK public tender notices (Find a Tender + Contracts Finder), up to 25 results |
+| `GET /v1/uk/company` | $0.01 USDC | UK company profile from Companies House: status, overdue flags, SIC codes, recent filings |
+| `GET /v1/uk/company/search` | $0.01 USDC | Find UK companies by name on the Companies House register, up to 20 results |
 | `GET /v1/uk/grants` | free | v1 placeholder. Innovate UK text is not republished yet |
 
 `/scrape` and `/extract` support static scraping and JS rendering via Playwright for SPAs and dynamic sites.
@@ -32,6 +34,21 @@ $0.02 USDC per search, maximum 25 notices. Data is the public Find a Tender and 
 
 `GET /v1/uk/grants` is free and does not republish Innovate UK or Chest text in v1.
 
+### GET /v1/uk/company
+
+$0.01 USDC per lookup. UK company profile from the Companies House public register, with no Companies House API key or account needed. Built for KYB, supplier and customer checks, lead enrichment, and credit control agents.
+
+| Query | Description |
+|-------|-------------|
+| `number` | Companies House company number, for example `00445790` or `SC540749`. Required. |
+| `filings` | Recent filings to include, 0 to 25. Default 10. |
+
+Returns `company` (name, status and status detail, type, incorporation and dissolution dates, registered office, SIC codes, previous names, accounts and confirmation statement dates with `overdue` flags) and `filings` (date, type, category, description, PDF link). Company-level data only: officer and PSC filings keep their date and type, but the name is replaced with a neutral label and no document link is returned. An unknown number returns 404 and is not charged.
+
+### GET /v1/uk/company/search
+
+$0.01 USDC per search. `q` (company name, 2 to 160 characters) and `limit` (1 to 20, default 10). Each result has `company_number`, `name`, `date_of_creation`, `date_of_cessation`, `dissolved`, `registered_office_address`, and `url`.
+
 ---
 
 ## Payment
@@ -40,7 +57,7 @@ This API uses the [x402 protocol](https://x402.org) for autonomous micropayments
 
 - **Network:** Base mainnet (`eip155:8453`)
 - **Asset:** USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`)
-- **Facilitator:** `https://facilitator.xpay.sh`
+- **Facilitators:** Coinbase CDP (`https://api.cdp.coinbase.com/platform/v2/x402`) and `https://facilitator.xpay.sh`
 - **Payment wallet:** `0x4E024e356bd01853654b7B5196F2B85F67Cc39EC`
 
 ---
