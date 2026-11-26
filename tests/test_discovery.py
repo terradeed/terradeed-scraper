@@ -16,6 +16,8 @@ PAID = [
     ("post", "/extract", main.EXTRACT_PRICE, main.EXTRACT_REQUIREMENTS, "0.050000"),
     ("post", "/extract/property", main.PROPERTY_PRICE, main.PROPERTY_REQUIREMENTS, "0.100000"),
     ("get", "/v1/uk/tenders", main.TENDER_PRICE, main.TENDER_REQUIREMENTS, "0.020000"),
+    ("get", "/v1/uk/company", main.COMPANY_PRICE, main.COMPANY_REQUIREMENTS, "0.010000"),
+    ("get", "/v1/uk/company/search", main.COMPANY_PRICE, main.COMPANY_SEARCH_REQUIREMENTS, "0.010000"),
 ]
 DASHES = ("\u2014", "\u2013")
 
@@ -32,6 +34,8 @@ def test_prices_are_unchanged():
         ("POST", "/extract"),
         ("POST", "/extract/property"),
         ("GET", "/v1/uk/tenders"),
+        ("GET", "/v1/uk/company"),
+        ("GET", "/v1/uk/company/search"),
     }
     for _method, _path, label, requirements, decimal in PAID:
         assert label in {"$0.01", "$0.05", "$0.10", "$0.02"}
